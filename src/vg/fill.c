@@ -1,12 +1,8 @@
-#include "pix/frame.h"
 #include <limits.h>
 #include <math.h>
+#include <pix/pix.h>
 #include <stdlib.h>
-#include <vg/canvas.h>
-#include <vg/fill.h>
-#include <vg/path.h>
-#include <vg/shape.h>
-#include <vg/transform.h>
+#include <vg/vg.h>
 
 // Edge for scanline fill
 typedef struct {

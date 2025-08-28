@@ -1,8 +1,8 @@
 #pragma once
+#include "path.h"
+#include "transform.h"
 #include <stdbool.h>
 #include <stdint.h>
-#include <vg/path.h>
-#include <vg/transform.h>
 
 typedef enum { VG_CAP_BUTT = 0, VG_CAP_SQUARE = 1, VG_CAP_ROUND = 2 } vg_cap_t;
 typedef enum {

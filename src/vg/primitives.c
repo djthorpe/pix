@@ -1,5 +1,4 @@
 #include <math.h>
-#include <vg/primitives.h>
 #include <vg/vg.h>
 
 static inline int32_t pack_i16(int x, int y) {

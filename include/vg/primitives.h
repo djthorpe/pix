@@ -1,7 +1,7 @@
 #pragma once
+#include "path.h"
+#include "shape.h"
 #include <stdbool.h>
-#include <vg/path.h>
-#include <vg/shape.h>
 
 vg_path_t vg_path_make_rect(int x, int y, int w, int h);
 vg_path_t vg_path_make_circle(int cx, int cy, int r, int segments);

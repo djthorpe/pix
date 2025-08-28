@@ -1,9 +1,9 @@
 #pragma once
+#include "fill.h"
+#include "shape.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <vg/fill.h>
-#include <vg/shape.h>
 
 typedef struct vg_canvas_t {
   struct vg_shape_t **shapes;

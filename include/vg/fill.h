@@ -1,8 +1,8 @@
 #pragma once
+#include "path.h"
+#include "transform.h"
 #include <stdbool.h>
 #include <stdint.h>
-#include <vg/path.h>
-#include <vg/transform.h>
 
 typedef enum { VG_FILL_EVEN_ODD = 0, VG_FILL_NON_ZERO = 1 } vg_fill_rule_t;
 

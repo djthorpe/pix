@@ -1,15 +1,7 @@
 #include <math.h>
-#include <pix/frame.h>
-#include <sdl/sdl_app.h>
-#include <vg/canvas.h>
-#include <vg/fill.h>
-#include <vg/path.h>
-#include <vg/primitives.h>
-#include <vg/shape.h>
-#include <vg/transform.h>
+#include <pix/pix.h>
+#include <pixsdl/pixsdl.h>
 #include <vg/vg.h>
-
-// no longer needed to pack points manually; we use primitives
 
 int main(int argc, char *argv[]) {
   int width = 640, height = 480;

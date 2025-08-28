@@ -1,4 +1,3 @@
-#include <vg/path.h>
 #include <vg/vg.h>
 
 vg_path_t vg_path_init(size_t capacity) {

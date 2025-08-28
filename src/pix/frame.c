@@ -1,5 +1,5 @@
 #include <math.h>
-#include <pix/frame.h>
+#include <pix/pix.h>
 
 void pix_frame_set_pixel(pix_frame_t *frame, size_t x, size_t y,
                          uint32_t color) {

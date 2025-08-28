@@ -1,11 +1,5 @@
-// Inlined from legacy vg/canvas.c
-#include "pix/frame.h"
 #include <math.h>
-#include <vg/canvas.h>
-#include <vg/fill.h>
-#include <vg/path.h>
-#include <vg/shape.h>
-#include <vg/transform.h>
+#include <pix/pix.h>
 #include <vg/vg.h>
 
 // --- Viewport culling helpers ---

@@ -1,6 +1,6 @@
 #include <SDL2/SDL.h>
-#include <sdl/frame_sdl.h>
-#include <sdl/sdl_app.h>
+#include <pix/pix.h>
+#include <pixsdl/pixsdl.h>
 #include <stdlib.h>
 
 struct sdl_app_t {

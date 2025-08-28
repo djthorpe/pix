@@ -9,7 +9,7 @@
  */
 #pragma once
 #include <SDL2/SDL.h>
-#include <pix/frame.h>
+#include <pix/pix.h>
 #include <stdbool.h>
 
 #ifdef __cplusplus

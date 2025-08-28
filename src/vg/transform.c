@@ -1,5 +1,5 @@
 #include <math.h>
-#include <vg/transform.h>
+#include <vg/vg.h>
 
 void vg_transform_identity(vg_transform_t *t) {
   for (int i = 0; i < 3; ++i) {

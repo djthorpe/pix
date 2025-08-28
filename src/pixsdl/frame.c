@@ -1,5 +1,5 @@
-#include <pix/frame.h>
-#include <sdl/frame_sdl.h>
+#include <pix/pix.h>
+#include <pixsdl/pixsdl.h>
 #include <stdlib.h>
 
 typedef struct sdl_line_cmd_t {
