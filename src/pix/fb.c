@@ -1,3 +1,4 @@
+/* Linux framebuffer backend implementation */
 #include "frame_internal.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -12,6 +13,13 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+
+#if defined(__linux__)
+#include <linux/fb.h>
+#define PIX_ENABLE_FB 1
+#endif
+
+#ifdef PIX_ENABLE_FB
 
 typedef struct pix_fb_ctx_t {
   int fd;
@@ -115,3 +123,8 @@ pix_frame_t *pixfb_frame_init(const char *path) {
   f->copy = pix_frame_copy;
   return f;
 }
+
+#else /* !PIX_ENABLE_FB */
+/* Stub for non-Linux builds: symbol intentionally omitted so header not exposed
+ */
+#endif
