@@ -1,3 +1,4 @@
+#include <math.h> // sinf
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -6,6 +7,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "../../src/pix/frame_internal.h" // pix_frame_clear (internal helper, same as other examples)
 #include <pix/fb.h>
 #include <pix/pix.h>
 #include <vg/vg.h>
