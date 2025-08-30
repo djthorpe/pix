@@ -5,35 +5,37 @@
 
 void pix_frame_set_pixel_rgba32(pix_frame_t *frame, pix_point_t pt,
                                 pix_color_t color) {
+  /* Internal canonical in‑memory order is R,G,B,A so that index 3 holds the
+   * most significant (alpha) byte. get_pixel_rgba32 already decodes assuming
+   * p[0]=R, p[1]=G, p[2]=B, p[3]=A. Previous implementation wrote A,R,G,B
+   * causing AA coverage (which relies on alpha) to sample the blue channel
+   * and produce tinted outlines (e.g. blue instead of intended colors). */
   uint16_t x = (uint16_t)pt.x, y = (uint16_t)pt.y;
-  uint8_t *row = (uint8_t *)frame->pixels + y * frame->stride;
-  uint32_t a = (color >> 24) & 0xFFu;
+  uint8_t *p = (uint8_t *)frame->pixels + y * frame->stride + x * 4u;
+  uint8_t a = (uint8_t)((color >> 24) & 0xFFu);
   if (a == 0)
-    return; // nothing to do
-  uint32_t sr = (color >> 16) & 0xFFu;
-  uint32_t sg = (color >> 8) & 0xFFu;
-  uint32_t sb = color & 0xFFu;
-  if (a == 255u) {
-    row[x * 4 + 0] = (uint8_t)a;
-    row[x * 4 + 1] = (uint8_t)sr;
-    row[x * 4 + 2] = (uint8_t)sg;
-    row[x * 4 + 3] = (uint8_t)sb;
+    return; // fully transparent => no effect
+  uint8_t sr = (uint8_t)((color >> 16) & 0xFFu);
+  uint8_t sg = (uint8_t)((color >> 8) & 0xFFu);
+  uint8_t sb = (uint8_t)(color & 0xFFu);
+  if (a == 255u) { // fast path opaque
+    p[0] = sr;
+    p[1] = sg;
+    p[2] = sb;
+    p[3] = a;
     return;
   }
-  // src-over blend
-  uint32_t da = row[x * 4 + 0];
-  uint32_t dr = row[x * 4 + 1];
-  uint32_t dg = row[x * 4 + 2];
-  uint32_t db = row[x * 4 + 3];
+  // Src-over blend with existing dst (premult not stored; straight alpha)
+  uint8_t dr = p[0], dg = p[1], db = p[2], da = p[3];
   uint32_t ia = 255u - a;
-  uint32_t r = (sr * a + dr * ia + 127u) / 255u;
-  uint32_t g = (sg * a + dg * ia + 127u) / 255u;
-  uint32_t b = (sb * a + db * ia + 127u) / 255u;
-  uint32_t out_a = a + ((da * ia + 127u) / 255u);
-  row[x * 4 + 0] = (uint8_t)out_a;
-  row[x * 4 + 1] = (uint8_t)r;
-  row[x * 4 + 2] = (uint8_t)g;
-  row[x * 4 + 3] = (uint8_t)b;
+  uint8_t or = (uint8_t)((sr * a + dr * ia + 127u) / 255u);
+  uint8_t og = (uint8_t)((sg * a + dg * ia + 127u) / 255u);
+  uint8_t ob = (uint8_t)((sb * a + db * ia + 127u) / 255u);
+  uint8_t oa = (uint8_t)(a + ((da * ia + 127u) / 255u));
+  p[0] = or;
+  p[1] = og;
+  p[2] = ob;
+  p[3] = oa;
 }
 
 void pix_frame_clear_rgba32(pix_frame_t *frame, pix_color_t value) {
@@ -44,10 +46,11 @@ void pix_frame_clear_rgba32(pix_frame_t *frame, pix_color_t value) {
   for (size_t y = 0; y < frame->size.h; ++y) {
     uint8_t *row = (uint8_t *)frame->pixels + y * frame->stride;
     for (size_t x = 0; x < frame->size.w; ++x) {
-      row[x * 4 + 0] = a;
-      row[x * 4 + 1] = r;
-      row[x * 4 + 2] = g;
-      row[x * 4 + 3] = b;
+      uint8_t *p = row + x * 4u;
+      p[0] = r;
+      p[1] = g;
+      p[2] = b;
+      p[3] = a;
     }
   }
 }

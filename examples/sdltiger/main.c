@@ -8,19 +8,20 @@
 #include "tiger.h"
 #include <SDL2/SDL.h>
 #include <pix/pix.h>
-#include <pixsdl/pixsdl.h>
+#include <pix/sdl.h>
 #include <vg/vg.h>
-
 
 int main(void) {
   int win_w = 640, win_h = (int)(640.0f * (tigerMaxY / tigerMaxX));
-  sdl_app_t *app = sdl_app_create(win_w, win_h, PIX_FMT_RGBA32, "Tiger (VG)");
-  if (!app)
+  pix_frame_t *frame = pixsdl_frame_init(
+      "Tiger (VG)", (pix_size_t){(uint16_t)win_w, (uint16_t)win_h},
+      PIX_FMT_RGBA32);
+  if (!frame)
     return 1;
   // Build tiger canvas (idempotent); ignore returned value since globals used.
   tiger_build_canvas(NULL, NULL); // idempotent
   update_transform(win_w, win_h);
-  pix_frame_t *frame = sdl_app_get_frame(app);
+  /* frame already created */
   uint32_t clear = 0xFFFFFFFFu; // white background
 
   // Debug environment controls removed.
@@ -117,22 +118,18 @@ int main(void) {
         }
       }
     }
-    int nw, nh;
-    sdl_app_get_size(app, &nw, &nh);
-    if (nw != win_w || nh != win_h) {
-      win_w = nw;
-      win_h = nh;
-      update_transform(win_w, win_h);
-    }
+    /* Window resize polling removed with accessor elimination; implement
+     * explicit recreate path if needed. */
     if (!frame->lock(frame))
       break;
     pix_frame_clear(frame, clear);
     vg_canvas_render(&g_canvas, frame); // always render full canvas
     frame->unlock(frame);
-    sdl_app_delay(app, 16);
+    SDL_Delay(16);
   }
 
   free_tiger_shapes();
-  sdl_app_destroy(app);
+  if (frame && frame->destroy)
+    frame->destroy(frame), frame = NULL;
   return 0;
 }

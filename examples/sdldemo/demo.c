@@ -1,8 +1,10 @@
 #include "../../src/pix/frame_internal.h"
 #include "../../src/vg/shape_internal.h" /* access to internal create/destroy until refactored */
+#include <SDL.h>                         /* SDL_GetTicks, SDL_Delay */
 #include <math.h>
 #include <pix/pix.h>
-#include <pixsdl/pixsdl.h>
+#include <pix/sdl.h>
+#include <string.h> /* strcmp */
 #include <vg/vg.h>
 
 static void free_text_shapes_from(vg_canvas_t *c, size_t start) {
@@ -31,11 +33,11 @@ int main(int argc, char *argv[]) {
       disable_text = true;
   }
   int width = 640, height = 480;
-  // Use RGBA so per-shape alpha is honored by our software blending
-  sdl_app_t *app = sdl_app_create(width, height, PIX_FMT_RGBA32, "VG Demo");
-  if (!app) {
+  pix_frame_t *frame = pixsdl_frame_init(
+      "VG Demo", (pix_size_t){(uint16_t)width, (uint16_t)height},
+      PIX_FMT_RGBA32);
+  if (!frame)
     return 1;
-  }
 
   // Build a square path centered on screen
   int cx = width / 2;
@@ -211,7 +213,7 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  pix_frame_t *frame = sdl_app_get_frame(app);
+  /* frame already created */
 
   // Animation state
   vg_transform_t transform, t_center, t_neg_center, rot, rot_neg, tmp;
@@ -225,14 +227,12 @@ int main(int argc, char *argv[]) {
   uint32_t clear_color = 0x00000000; // transparent black background
 
   int running = 1;
-  uint32_t start = sdl_app_ticks(app);
+  uint32_t start = SDL_GetTicks();
   while (running) {
-    if (sdl_app_poll_should_close(app)) {
-      running = 0;
-    }
+    /* poll for close handled by SDL_QUIT */
 
-    int new_w, new_h;
-    sdl_app_get_size(app, &new_w, &new_h);
+    int new_w = width, new_h = height; /* window size accessors removed; TODO:
+                                          track externally if needed */
     if (new_w != width || new_h != height) {
       width = new_w;
       height = new_h;
@@ -404,7 +404,7 @@ int main(int argc, char *argv[]) {
     }
 
     // Animate transforms
-    float t = (sdl_app_ticks(app) - start) / 1000.0f;
+    float t = (SDL_GetTicks() - start) / 1000.0f;
     vg_transform_rotate(&rot, t);
     vg_transform_multiply(&tmp, &rot, &t_neg_center);
     vg_transform_multiply(&transform, &t_center, &tmp);
@@ -428,13 +428,14 @@ int main(int argc, char *argv[]) {
     // (Vector text only; debug bitmap path removed)
     frame->unlock(frame);
 
-    sdl_app_delay(app, 16); // ~60 FPS
+    SDL_Delay(16); // ~60 FPS
   }
 
   // Cleanup
   /* Paths cleaned up by shape destruction */
   // Free text glyph shapes
   free_text_shapes_from(&canvas, base_shapes);
-  sdl_app_destroy(app);
+  if (frame && frame->destroy)
+    frame->destroy(frame), frame = NULL;
   return 0;
 }

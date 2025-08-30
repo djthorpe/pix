@@ -204,7 +204,9 @@ static void vg__fill_path_simple(const vg_path_t *path,
     active = sorted;
     int span_count_this_row = 0;
     // Build spans
-    if (rule == VG_FILL_EVEN_ODD) {
+    // Even-odd family (with or without bridging) share parity span building;
+    // RAW variant skips the later bridging pass via its distinct enum.
+    if (rule == VG_FILL_EVEN_ODD || rule == VG_FILL_EVEN_ODD_RAW) {
       int inside = 0;
       float prev_x = 0.f;
       for (SimpleEdge *se = active; se; se = se->next) {

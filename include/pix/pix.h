@@ -57,3 +57,6 @@ typedef uint32_t pix_color_t;
 
 #include "frame.h"
 #include "image.h"
+#ifdef PIX_ENABLE_SDL
+#include "sdl.h"
+#endif

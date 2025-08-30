@@ -29,3 +29,6 @@
 #include "primitives.h" /**< @ingroup vg */
 #include "shape.h"      /**< @ingroup vg */
 #include "transform.h"  /**< @ingroup vg */
+/* Note: no additional global convenience wrappers are declared here to keep
+ * the public API surface minimal. Drawing happens through canvas + shape APIs.
+ */

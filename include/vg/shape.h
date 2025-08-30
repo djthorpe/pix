@@ -54,6 +54,20 @@ typedef enum vg_fill_rule_t {
 typedef struct vg_shape_t vg_shape_t;
 
 /**
+ * @brief Allocate a new empty path shape.
+ * Returned pointer must be released with vg_shape_destroy. Publicly exposed
+ * to support tooling (icon/font generators) that build shapes outside a
+ * canvas prior to appending / cloning.
+ */
+vg_shape_t *vg_shape_create(void);
+
+/**
+ * @brief Destroy (free) a shape previously created with vg_shape_create.
+ * Safe to pass NULL.
+ */
+void vg_shape_destroy(vg_shape_t *shape);
+
+/**
  * @name Path Access
  * Direct access to the internal path for building / mutation. The pointer
  * remains valid until vg_canvas_clear or destroy. Mutating the returned

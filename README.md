@@ -25,22 +25,21 @@ Small C library providing:
 
 ```text
 include/
-  pix/    public pixel frame API
+  pix/    public pixel frame API (+ sdl.h when SDL enabled)
   vg/     vector graphics headers
-  pixsdl/ SDL convenience layer (optional)
 src/
-  pix/    per‑format frame ops + helpers
+  pix/    per‑format frame ops + helpers (and SDL backend when enabled)
   vg/     path / fill / primitives / canvas / transform / shape
-  pixsdl/ SDL bridge (creates a `pix_frame_t` backed by streaming texture)
 examples/
   sdldemo   simple animated primitives
   sdltiger  SVG tiger subset (polylines) demo
   sdlimage  image blit + transform showcase
+  sdlicons  generated icon grid (multi-shape SVG subpaths)
 ```
 
 ## Build
 
-Requirements: CMake (>= 3.10), a C compiler, and SDL2 development headers.
+Requirements: CMake (>= 3.10), a C compiler, and SDL2 development headers (only needed for the SDL examples / backend).
 
 Typical out‑of‑source build:
 
@@ -93,7 +92,7 @@ typedef struct pix_frame_t {
   void *pixels;               // backing store
   size_t pitch;               // bytes per row
   // function pointers (may be NULL if unsupported by backend):
-  void (*finalize)(struct pix_frame_t*);      // optional cleanup
+  void (*destroy)(struct pix_frame_t*);       // optional cleanup (self-frees)
   bool (*lock)(struct pix_frame_t*);          // optional (e.g. SDL texture)
   void (*unlock)(struct pix_frame_t*);
   void (*set_pixel)(struct pix_frame_t*, pix_point_t pt, pix_color_t c);
@@ -125,7 +124,16 @@ Turn a shape into an image blit: `vg_shape_set_image(shape, frame, src_origin, s
 
 ### SDL glue
 
-`pixsdl/` provides helpers to wrap an SDL2 streaming texture as a `pix_frame_t` so the same software rendering can target a window.
+When built with SDL (`PIX_ENABLE_SDL` defined) `pix/sdl.h` exposes a single convenience function that creates a window + streaming texture and returns a `pix_frame_t*` whose pixel buffer maps the texture:
+
+```c
+#include <pix/sdl.h> // requires build with SDL
+pix_frame_t *frame = pixsdl_frame_init("Icons", (pix_size_t){ 1024, 768 }, PIX_FMT_RGBA32);
+// ... render ...
+frame->destroy(frame);
+```
+
+All SDL window / renderer / texture details are intentionally hidden; the returned frame supplies `lock`, `unlock`, and `destroy` callbacks. Previous separate library name and accessors were removed to keep the public surface minimal.
 
 Color encoding is `0xAARRGGBB` (straight alpha). Use `PIX_COLOR_NONE` to disable fill or stroke.
 
@@ -144,9 +152,43 @@ Guidelines:
 * `vg_path_append` is variadic: always end the list with `NULL`.
 * For large paths, the library allocates additional segments instead of reallocating the whole point array.
 * Fill sampling uses half‑open pixel centers (y+0.5) to reduce seam artifacts.
-* SDL texture format (when using pixsdl) matches the in‑memory pixel layout to avoid channel swizzle.
+* SDL texture format (when built with SDL) matches the in‑memory pixel layout to avoid channel swizzle.
 * Bounding boxes ignore transforms & stroke expansion (future enhancement).
 
 ---
 
 Early‑stage project; API surface intentionally small and may evolve.
+
+## Generated Icon Demo (sdlicons)
+
+An optional generator (Go tool under `cmd/svg2pix`) converts a curated SVG
+icon set into C builders. Each icon can consist of multiple SVG subpaths;
+the generator now preserves that structure by emitting a builder function
+per icon with the signature:
+
+```c
+bool vg_icon_<style>_<name>(vg_shape_t **out_shapes, size_t *out_count);
+```
+
+Usage pattern:
+
+1. Allocate a temporary array, e.g. `vg_shape_t *tmp[16]; size_t n = 0;`
+2. Call the builder. On success `tmp[0..n-1]` are heap-allocated shapes
+  (created via `vg_shape_create`) that you own.
+3. Copy or append their path/style data into your canvas-owned shapes
+  (e.g. by appending new shapes via `vg_canvas_append`).
+4. Destroy the temporary shapes with `vg_shape_destroy` (do not pass them
+  directly to a canvas; canvas will free only shapes it allocates).
+
+Why: multiple subpaths previously had to be heuristically split after the
+fact (detecting large jump segments). Preserving subpaths at generation
+time avoids visual artifacts like unwanted stroke bridges.
+
+The `examples/sdlicons` demo shows a 4x4 grid of randomly selected filled
+and outline icons rendered white on black, with interactive pan / zoom /
+rotate (arrow keys to pan, +/- to zoom, q/e to rotate, space to reshuffle).
+
+Filled icons set only a fill color; outline icons set only a stroke style.
+
+Note: This is an experimental pipeline; the icon generator is not yet part
+of the default build and large icon sets will increase compile time.

@@ -3,7 +3,7 @@
 #include <math.h>
 #include <pix/image.h>
 #include <pix/pix.h>
-#include <pixsdl/pixsdl.h>
+#include <pix/sdl.h>
 #include <stdio.h>
 #include <string.h>
 #include <vg/vg.h>
@@ -83,15 +83,13 @@ int main(int argc, char **argv) {
   int win_h = img->size.h;
   float img_aspect =
       (img->size.h != 0) ? (float)img->size.w / (float)img->size.h : 1.0f;
-  sdl_app_t *app = sdl_app_create(win_w, win_h, PIX_FMT_RGB24, "sdlimage");
-  if (!app) {
-    fprintf(stderr, "SDL app create failed\n");
-    if (img->finalize)
-      img->finalize(img);
-    VG_FREE(img);
+  pix_frame_t *frame = pixsdl_frame_init(
+      "sdlimage", (pix_size_t){(uint16_t)win_w, (uint16_t)win_h},
+      PIX_FMT_RGB24);
+  if (!frame) {
+    fprintf(stderr, "frame init failed\n");
     return 1;
   }
-  pix_frame_t *frame = sdl_app_get_frame(app);
   /* Canvas with room for two image shapes (normal + flipped). */
   vg_canvas_t canvas = vg_canvas_init(2);
   vg_shape_t *shape_normal = vg_canvas_append(&canvas);
@@ -99,9 +97,14 @@ int main(int argc, char **argv) {
   if (!shape_normal || !shape_flipped) {
     fprintf(stderr, "Canvas allocation failed\n");
     vg_canvas_destroy(&canvas);
-    if (img && img->finalize)
-      img->finalize(img), VG_FREE(img);
-    sdl_app_destroy(app);
+    if (img && img->destroy) {
+      img->destroy(img);
+      img = NULL;
+    }
+    if (frame && frame->destroy) {
+      frame->destroy(frame);
+      frame = NULL;
+    }
     return 1;
   }
   /* Configure initial image shape (full image). */
@@ -151,10 +154,8 @@ int main(int argc, char **argv) {
           /* cycle to next image */
           if (image_count > 0) {
             /* Free current original image */
-            if (img) {
-              if (img->finalize)
-                img->finalize(img);
-              VG_FREE(img);
+            if (img && img->destroy) {
+              img->destroy(img);
               img = NULL;
             }
             /* Free flipped cache (will be regenerated lazily) */
@@ -170,7 +171,15 @@ int main(int argc, char **argv) {
               img_aspect = (img->size.h != 0)
                                ? (float)img->size.w / (float)img->size.h
                                : 1.0f;
-              pix_frame_resize_sdl(frame, win_w, win_h);
+              // recreate frame with new size
+              if (frame && frame->destroy) {
+                frame->destroy(frame);
+                frame = NULL;
+              }
+              frame = pixsdl_frame_init(
+                  "pix sdlimage",
+                  (pix_size_t){(uint16_t)win_w, (uint16_t)win_h},
+                  PIX_FMT_RGBA32);
               /* Rebind image shapes to new frame */
               vg_shape_set_image(shape_normal, img, (pix_point_t){0, 0},
                                  (pix_size_t){0, 0}, (pix_point_t){0, 0},
@@ -233,7 +242,13 @@ int main(int argc, char **argv) {
           int new_w = e.window.data1;
           int new_h = e.window.data2;
           if (new_w > 0 && new_h > 0) {
-            pix_frame_resize_sdl(frame, new_w, new_h);
+            if (frame && frame->destroy) {
+              frame->destroy(frame);
+              frame = NULL;
+            }
+            frame = pixsdl_frame_init(
+                "pix sdlimage", (pix_size_t){(uint16_t)new_w, (uint16_t)new_h},
+                PIX_FMT_RGBA32);
             /* Recompute only base_scale (retain user_scale, pan, angle). */
             if (img && img->size.w > 0 && img->size.h > 0) {
               float sx = (float)frame->size.w / (float)img->size.w;
@@ -277,7 +292,7 @@ int main(int argc, char **argv) {
                 malloc((size_t)img_flipped->stride * img->size.h);
             img_flipped->lock = NULL;
             img_flipped->unlock = NULL;
-            img_flipped->finalize = NULL;
+            img_flipped->destroy = NULL;
             if (!img_flipped->pixels) {
               free(img_flipped);
               img_flipped = NULL;
@@ -309,17 +324,19 @@ int main(int argc, char **argv) {
     SDL_Delay(10); /* simple throttle */
   }
 
-  if (img) {
-    if (img->finalize)
-      img->finalize(img);
-    VG_FREE(img);
+  if (img && img->destroy) {
+    img->destroy(img);
+    img = NULL;
   }
   if (img_flipped) {
     VG_FREE(img_flipped->pixels);
     VG_FREE(img_flipped);
   }
   vg_canvas_destroy(&canvas);
-  sdl_app_destroy(app);
+  if (frame && frame->destroy) {
+    frame->destroy(frame);
+    frame = NULL;
+  }
   return 0;
 }
 

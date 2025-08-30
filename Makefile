@@ -2,11 +2,13 @@ CMAKE ?= $(shell which cmake 2>/dev/null)
 DOCKER ?= $(shell which docker 2>/dev/null)
 BUILD_DIR ?= build
 GO ?= $(shell which go 2>/dev/null)
+JOBS ?= 8
 
 # Icon generation settings
 TABLER_FILLED_DIR ?= third_party/tabler-icons/icons/filled
 TABLER_OUTLINE_DIR ?= third_party/tabler-icons/icons/outline
 ICON_OUT_DIR ?= src/icons/generated
+ICON_UPSCALE ?= 1  # geometric upscale factor applied before rounding (improves zoom fidelity)
 SVG2PIX := $(BUILD_DIR)/svg2pix
 
 all: dep-cmake dep-go mkdir $(SVG2PIX) icons build
@@ -14,7 +16,7 @@ all: dep-cmake dep-go mkdir $(SVG2PIX) icons build
 .PHONY: build
 build:
 	@$(CMAKE) -B ${BUILD_DIR} .
-	@$(CMAKE) --build ${BUILD_DIR}
+	@$(CMAKE) --build ${BUILD_DIR} -- -j$(JOBS)
 
 # Generate the documentation
 .PHONY: docs
@@ -47,7 +49,7 @@ dep-go:
 # Build svg2pix code generator
 $(SVG2PIX): dep-go cmd/svg2pix/main.go go.mod
 	@echo Building svg2pix tool
-	@${GO} build -o $@ ./cmd/svg2pix
+	@${GO} build -o ${BUILD_DIR}/$@ ./cmd/svg2pix
 
 # Generate icon C sources from Tabler icons (filled + outline)
 .PHONY: icons
@@ -55,6 +57,6 @@ icons: $(SVG2PIX)
 	@echo Generating icon sources from Tabler \(filled + outline\)
 	@install -d -m 755 $(ICON_OUT_DIR)/filled
 	@install -d -m 755 $(ICON_OUT_DIR)/outline
-	@$(SVG2PIX) -in $(TABLER_FILLED_DIR) -out $(ICON_OUT_DIR)/filled -prefix vg_icon_f_
-	@$(SVG2PIX) -in $(TABLER_OUTLINE_DIR) -out $(ICON_OUT_DIR)/outline -prefix vg_icon_o_
+	@$(SVG2PIX) -in $(TABLER_FILLED_DIR) -out $(ICON_OUT_DIR)/filled -prefix vg_icon_f_ -upscale $(ICON_UPSCALE)
+	@$(SVG2PIX) -in $(TABLER_OUTLINE_DIR) -out $(ICON_OUT_DIR)/outline -prefix vg_icon_o_ -upscale $(ICON_UPSCALE)
 	@echo Icon generation complete: $(ICON_OUT_DIR)

@@ -27,15 +27,13 @@ static void jpeg_frame_unlock(pix_frame_t *f) { (void)f; }
 
 // Tiny helper frame creation for RGB24 software frame (no backend, always
 // locked).
-static void simple_frame_finalize(pix_frame_t *frame) {
+static void simple_frame_destroy(pix_frame_t *frame) {
   if (!frame)
     return;
   if (frame->pixels) {
     VG_FREE(frame->pixels);
-    frame->pixels = NULL;
   }
-  frame->stride = 0;
-  frame->user = NULL;
+  VG_FREE(frame);
 }
 
 static pix_frame_t *alloc_frame(uint16_t w, uint16_t h, pix_format_t fmt) {
@@ -75,11 +73,11 @@ static pix_frame_t *alloc_frame(uint16_t w, uint16_t h, pix_format_t fmt) {
   // lock/unlock no-op (already CPU accessible)
   f->lock = jpeg_frame_lock;
   f->unlock = jpeg_frame_unlock;
-  f->finalize = simple_frame_finalize;
+  f->destroy = simple_frame_destroy;
   return f;
 }
 
-/* Caller frees returned frame: VG_FREE(frame->pixels); VG_FREE(frame); */
+/* Caller destroys returned frame with frame->destroy(frame) (frees struct). */
 
 typedef struct {
   jpeg_stream_t stream;
@@ -213,8 +211,7 @@ static pix_frame_t *pix_frame_init_jpeg_common(jpeg_stream_t *stream,
   jr = jd_decomp(&jd, jpeg_outfunc, 0); /* scale=0 full size */
   if (jr != JDR_OK) {
     fprintf(stderr, "jd_decomp failed (%d)\n", jr);
-    ctx.frame->finalize(ctx.frame);
-    VG_FREE(ctx.frame);
+    ctx.frame->destroy(ctx.frame);
     VG_FREE(pool);
     return NULL;
   }

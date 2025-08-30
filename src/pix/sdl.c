@@ -1,20 +1,17 @@
-#include "../pix/frame_internal.h"
+// SDL backend integrated into core pix library when SDL2 is found.
+#include "frame_internal.h"
 #include <SDL2/SDL.h>
 #include <pix/pix.h>
 #include <pix/sdl.h>
-#include <stdbool.h>
-#include <stdlib.h>
 #include <vg/vg.h>
 
-/* Private (now opaque) SDL backend context stored in frame->user */
 typedef struct pix_frame_sdl_ctx_t {
   SDL_Window *window;
   SDL_Renderer *renderer;
   SDL_Texture *texture;
-  int tex_w, tex_h;  /* backing texture size */
-  bool owns_texture; /* destroy texture on destroy */
-  bool owns_window;  /* destroy window+renderer & SDL_Quit */
-  /* Queued GPU line commands (optional acceleration path) */
+  int tex_w, tex_h;
+  bool owns_texture;
+  bool owns_window;
   void *line_cmds; /* sdl_line_cmd_t[] */
   size_t line_count;
   size_t line_capacity;
@@ -22,7 +19,7 @@ typedef struct pix_frame_sdl_ctx_t {
 
 typedef struct sdl_line_cmd_t {
   int x0, y0, x1, y1;
-  uint8_t r, g, b, a; // 0xAARRGGBB order mapped to SDL_SetRenderDrawColor RGBA
+  uint8_t r, g, b, a;
 } sdl_line_cmd_t;
 
 static void sdl_queue_line(pix_frame_sdl_ctx_t *ctx, pix_point_t a,
@@ -38,8 +35,7 @@ static void sdl_queue_line(pix_frame_sdl_ctx_t *ctx, pix_point_t a,
     ctx->line_cmds = new_buf;
     ctx->line_capacity = new_cap;
   }
-  sdl_line_cmd_t *arr = (sdl_line_cmd_t *)ctx->line_cmds;
-  sdl_line_cmd_t *cmd = &arr[ctx->line_count++];
+  sdl_line_cmd_t *cmd = &((sdl_line_cmd_t *)ctx->line_cmds)[ctx->line_count++];
   cmd->x0 = a.x;
   cmd->y0 = a.y;
   cmd->x1 = b.x;
@@ -52,13 +48,9 @@ static void sdl_queue_line(pix_frame_sdl_ctx_t *ctx, pix_point_t a,
 
 static void pix_frame_sdl_draw_line(pix_frame_t *frame, pix_point_t a,
                                     pix_point_t b, pix_color_t color) {
-  if (!frame || !frame->user) {
+  if (!frame || !frame->user)
     return;
-  }
-  pix_frame_sdl_ctx_t *ctx = (pix_frame_sdl_ctx_t *)frame->user;
-  // Queue for GPU draw; coordinates are in window space since we render after
-  // copying the texture to the renderer with identity transform
-  sdl_queue_line(ctx, a, b, color);
+  sdl_queue_line((pix_frame_sdl_ctx_t *)frame->user, a, b, color);
 }
 
 static bool pix_frame_sdl_lock(pix_frame_t *frame) {
@@ -67,9 +59,8 @@ static bool pix_frame_sdl_lock(pix_frame_t *frame) {
   pix_frame_sdl_ctx_t *ctx = (pix_frame_sdl_ctx_t *)frame->user;
   void *pixels = NULL;
   int pitch = 0;
-  if (SDL_LockTexture(ctx->texture, NULL, &pixels, &pitch) != 0) {
+  if (SDL_LockTexture(ctx->texture, NULL, &pixels, &pitch) != 0)
     return false;
-  }
   frame->pixels = pixels;
   frame->stride = (size_t)pitch;
   return true;
@@ -81,7 +72,6 @@ static void pix_frame_sdl_unlock(pix_frame_t *frame) {
   pix_frame_sdl_ctx_t *ctx = (pix_frame_sdl_ctx_t *)frame->user;
   SDL_UnlockTexture(ctx->texture);
   SDL_RenderCopy(ctx->renderer, ctx->texture, NULL, NULL);
-  // Flush queued lines using GPU
   if (ctx->line_count && ctx->line_cmds) {
     sdl_line_cmd_t *arr = (sdl_line_cmd_t *)ctx->line_cmds;
     for (size_t i = 0; i < ctx->line_count; ++i) {
@@ -92,12 +82,32 @@ static void pix_frame_sdl_unlock(pix_frame_t *frame) {
       SDL_SetRenderDrawColor(ctx->renderer, cmd->r, cmd->g, cmd->b, cmd->a);
       SDL_RenderDrawLine(ctx->renderer, cmd->x0, cmd->y0, cmd->x1, cmd->y1);
     }
-    ctx->line_count = 0; // keep capacity, reuse buffer
+    ctx->line_count = 0;
   }
   SDL_RenderPresent(ctx->renderer);
 }
 
-static void pix_frame_sdl_destroy(pix_frame_t *frame);
+static void pix_frame_sdl_destroy(pix_frame_t *frame) {
+  if (!frame)
+    return;
+  pix_frame_sdl_ctx_t *ctx = (pix_frame_sdl_ctx_t *)frame->user;
+  if (ctx) {
+    SDL_UnlockTexture(ctx->texture);
+    if (ctx->owns_texture && ctx->texture)
+      SDL_DestroyTexture(ctx->texture);
+    if (ctx->owns_window) {
+      if (ctx->renderer)
+        SDL_DestroyRenderer(ctx->renderer);
+      if (ctx->window)
+        SDL_DestroyWindow(ctx->window);
+      SDL_Quit();
+    }
+    if (ctx->line_cmds)
+      VG_FREE(ctx->line_cmds);
+    VG_FREE(ctx);
+  }
+  VG_FREE(frame);
+}
 
 static bool pix_frame_init_sdl(pix_frame_t *frame, SDL_Window *win,
                                SDL_Renderer *ren, SDL_Texture *tex, int w,
@@ -107,6 +117,7 @@ static bool pix_frame_init_sdl(pix_frame_t *frame, SDL_Window *win,
   pix_frame_sdl_ctx_t *ctx = (pix_frame_sdl_ctx_t *)VG_MALLOC(sizeof(*ctx));
   if (!ctx)
     return false;
+  *ctx = (pix_frame_sdl_ctx_t){0};
   ctx->window = win;
   ctx->renderer = ren;
   ctx->texture = tex;
@@ -114,11 +125,6 @@ static bool pix_frame_init_sdl(pix_frame_t *frame, SDL_Window *win,
   ctx->tex_h = h;
   ctx->owns_texture = false;
   ctx->owns_window = false;
-  // Initialize GPU line queue
-  ctx->line_cmds = NULL;
-  ctx->line_count = 0;
-  ctx->line_capacity = 0;
-
   frame->user = ctx;
   frame->size.w = (uint16_t)w;
   frame->size.h = (uint16_t)h;
@@ -128,11 +134,9 @@ static bool pix_frame_init_sdl(pix_frame_t *frame, SDL_Window *win,
   frame->set_pixel = pix_frame_set_pixel;
   frame->get_pixel = pix_frame_get_pixel;
   frame->copy = pix_frame_copy;
-  // Override draw_line to use hardware if available
   frame->draw_line = pix_frame_sdl_draw_line;
   frame->pixels = NULL;
   frame->stride = 0;
-  // Provide cleanup via destroy hook so callers can just call frame->destroy.
   frame->destroy = pix_frame_sdl_destroy;
   return true;
 }
@@ -156,38 +160,9 @@ static bool pix_frame_init_sdl_auto(pix_frame_t *frame, SDL_Window *win,
   return true;
 }
 
-// Removed public resize/rebind; users recreate frame instead.
-
-static void pix_frame_sdl_destroy(pix_frame_t *frame) {
-  if (!frame)
-    return;
-  pix_frame_sdl_ctx_t *ctx = (pix_frame_sdl_ctx_t *)frame->user;
-  if (!ctx)
-    goto done_free;
-  // Ensure unlocked
-  SDL_UnlockTexture(ctx->texture);
-  if (ctx->owns_texture && ctx->texture) {
-    SDL_DestroyTexture(ctx->texture);
-  }
-  if (ctx->owns_window) {
-    if (ctx->renderer)
-      SDL_DestroyRenderer(ctx->renderer);
-    if (ctx->window)
-      SDL_DestroyWindow(ctx->window);
-    SDL_Quit();
-  }
-  if (ctx->line_cmds) {
-    VG_FREE(ctx->line_cmds);
-  }
-  VG_FREE(ctx);
-done_free:
-  VG_FREE(frame);
-}
-
 pix_frame_t *pixsdl_frame_init(const char *title, pix_size_t size,
                                pix_format_t fmt) {
-  int w = (int)size.w;
-  int h = (int)size.h;
+  int w = (int)size.w, h = (int)size.h;
   if (SDL_Init(SDL_INIT_VIDEO) != 0)
     return NULL;
   pix_frame_t *frame = (pix_frame_t *)VG_MALLOC(sizeof(pix_frame_t));
@@ -213,8 +188,6 @@ pix_frame_t *pixsdl_frame_init(const char *title, pix_size_t size,
     VG_FREE(frame);
     return NULL;
   }
-  pix_frame_sdl_ctx_t *ctx = (pix_frame_sdl_ctx_t *)frame->user;
-  if (ctx)
-    ctx->owns_window = true;
+  ((pix_frame_sdl_ctx_t *)frame->user)->owns_window = true;
   return frame;
 }

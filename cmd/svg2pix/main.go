@@ -16,17 +16,26 @@ import (
 
 // --- SVG model ---
 type svgFile struct {
-	XMLName xml.Name  `xml:"svg"`
-	ViewBox string    `xml:"viewBox,attr"`
-	Paths   []svgPath `xml:"path"`
+	XMLName xml.Name    `xml:"svg"`
+	ViewBox string      `xml:"viewBox,attr"`
+	Paths   []svgPath   `xml:"path"`
+	Circles []svgCircle `xml:"circle"`
 }
 type svgPath struct {
 	D string `xml:"d,attr"`
 }
+type svgCircle struct {
+	Cx string `xml:"cx,attr"`
+	Cy string `xml:"cy,attr"`
+	R  string `xml:"r,attr"`
+}
 
 // --- Geometry ---
 type fpoint struct{ x, y float64 }
-type subpath struct{ pts []fpoint }
+type subpath struct {
+	pts    []fpoint
+	closed bool // true if explicit 'Z' encountered
+}
 
 // --- CLI ---
 func main() {
@@ -37,18 +46,24 @@ func main() {
 	flatness := flag.Float64("flatness", 0.25, "Curve flattening tolerance (px)")
 	strategy := flag.String("strategy", "array", "Emission strategy: array|calls")
 	limit := flag.Int("limit", 0, "Process only first N files (debug)")
+	upscale := flag.Int("upscale", 1, "Pre-round geometry up-scale factor (>=1)")
+	group := flag.Bool("group", false, "Group all SVG subpaths into one vg_path_t with segment breaks (useful for filled icons with holes)")
 	flag.Parse()
 	if *in == "" {
 		fmt.Fprintln(os.Stderr, "--in required")
 		os.Exit(1)
 	}
-	if err := run(*in, *outDir, *prefix, *size, *flatness, *strategy, *limit); err != nil {
+	// Auto-enable grouping heuristically if prefix suggests filled icons
+	if strings.Contains(*prefix, "_f_") && !*group {
+		*group = true
+	}
+	if err := run(*in, *outDir, *prefix, *size, *flatness, *strategy, *limit, *upscale, *group); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
 }
 
-func run(inPath, outDir, prefix string, normSize int, flat float64, strategy string, limit int) error {
+func run(inPath, outDir, prefix string, normSize int, flat float64, strategy string, limit int, upscale int, group bool) error {
 	fi, err := os.Stat(inPath)
 	if err != nil {
 		return err
@@ -95,14 +110,14 @@ func run(inPath, outDir, prefix string, normSize int, flat float64, strategy str
 		if err != nil {
 			return fmt.Errorf("%s: %w", f, err)
 		}
-		subpaths, w, h, warn := buildGeometry(svg, normSize, flat)
-		csrc := emitC(iconName, prefix, strategy, subpaths, int(w), int(h), warn)
+		subpaths, w, h, warn := buildGeometry(svg, normSize, flat, upscale)
+		csrc := emitC(iconName, prefix, strategy, subpaths, int(w), int(h), warn, upscale, group)
 		if err := os.WriteFile(filepath.Join(outDir, iconName+".c"), []byte(csrc), 0o644); err != nil {
 			return err
 		}
 		hdrEntries = append(hdrEntries, iconName)
 	}
-	hdr := emitHeader(hdrEntries, prefix)
+	hdr := emitHeader(hdrEntries, prefix, upscale)
 	return os.WriteFile(filepath.Join(outDir, "icons.h"), []byte(hdr), 0o644)
 }
 
@@ -212,7 +227,7 @@ func (l *lexer) number() (float64, bool) {
 }
 
 // --- Path command parsing & flattening ---
-func buildGeometry(svg *svgFile, normSize int, flat float64) ([]subpath, float64, float64, []string) {
+func buildGeometry(svg *svgFile, normSize int, flat float64, upscale int) ([]subpath, float64, float64, []string) {
 	vbMinX, vbMinY, vbW, vbH := 0.0, 0.0, 24.0, 24.0
 	if svg.ViewBox != "" {
 		parts := strings.Fields(svg.ViewBox)
@@ -230,18 +245,73 @@ func buildGeometry(svg *svgFile, normSize int, flat float64) ([]subpath, float64
 		outW = vbW * scale
 		outH = vbH * scale
 	}
+	if upscale < 1 {
+		upscale = 1
+	}
 	var subpaths []subpath
 	var warnings []string
 	for _, p := range svg.Paths {
 		spaths, warn := parsePathData(p.D, flat, func(x, y float64) (float64, float64) {
-			return (x - vbMinX) * scale, (y - vbMinY) * scale
+			return (x - vbMinX) * scale * float64(upscale), (y - vbMinY) * scale * float64(upscale)
 		})
 		if len(spaths) > 0 {
 			subpaths = append(subpaths, spaths...)
 		}
 		warnings = append(warnings, warn...)
 	}
-	return subpaths, outW, outH, warnings
+	// Circles: approximate with polygon based on flatness criterion
+	for _, c := range svg.Circles {
+		if c.R == "" { // skip invalid
+			continue
+		}
+		cx, _ := strconv.ParseFloat(c.Cx, 64)
+		cy, _ := strconv.ParseFloat(c.Cy, 64)
+		r, _ := strconv.ParseFloat(c.R, 64)
+		if r <= 0 {
+			continue
+		}
+		// Scale radius identical in x/y (uniform scale earlier)
+		rScaled := r * scale * float64(upscale)
+		// Determine segment count using same tolerance heuristic as arcs
+		segs := 0
+		if rScaled > 0 {
+			// Protect against flat >= rScaled
+			if flat >= rScaled {
+				segs = 8
+			} else {
+				// θ_max = 2*acos(1 - flat/r)
+				theta := 2 * math.Acos(1-flat/r)
+				if theta <= 0 {
+					segs = 16
+				} else {
+					segs = int(math.Ceil(2 * math.Pi / theta))
+				}
+				if segs < 8 {
+					segs = 8
+				}
+			}
+		}
+		if segs == 0 {
+			segs = 8
+		}
+		sp := subpath{pts: make([]fpoint, 0, segs+1), closed: true}
+		for i := 0; i < segs; i++ {
+			ang := (float64(i) / float64(segs)) * 2 * math.Pi
+			x := cx + r
+			y := cy
+			// parametric circle
+			x = cx + r*math.Cos(ang)
+			y = cy + r*math.Sin(ang)
+			tx, ty := (x-vbMinX)*scale*float64(upscale), (y-vbMinY)*scale*float64(upscale)
+			sp.pts = append(sp.pts, fpoint{tx, ty})
+		}
+		// close explicitly by repeating first point
+		if len(sp.pts) > 0 {
+			sp.pts = append(sp.pts, sp.pts[0])
+		}
+		subpaths = append(subpaths, sp)
+	}
+	return subpaths, outW * float64(upscale), outH * float64(upscale), warnings
 }
 
 func parsePathData(d string, flat float64, xf func(x, y float64) (float64, float64)) ([]subpath, []string) {
@@ -258,8 +328,7 @@ func parsePathData(d string, flat float64, xf func(x, y float64) (float64, float
 			subs = append(subs, *curSub)
 			curSub = &subs[len(subs)-1]
 		}
-		// de-dup
-		if n := len(curSub.pts); n > 0 {
+		if n := len(curSub.pts); n > 0 { // de-dup consecutive
 			last := curSub.pts[n-1]
 			if math.Abs(last.x-pt.x) < 1e-6 && math.Abs(last.y-pt.y) < 1e-6 {
 				return
@@ -267,15 +336,17 @@ func parsePathData(d string, flat float64, xf func(x, y float64) (float64, float
 		}
 		curSub.pts = append(curSub.pts, pt)
 	}
-	closeSub := func() {
+	finalizeSub := func() { curSub = nil } // leave open (no synthetic closing segment)
+	closeSub := func() {                   // explicit 'Z'
 		if curSub != nil && len(curSub.pts) > 1 {
 			first := curSub.pts[0]
 			last := curSub.pts[len(curSub.pts)-1]
 			if math.Abs(first.x-last.x) > 1e-6 || math.Abs(first.y-last.y) > 1e-6 {
 				curSub.pts = append(curSub.pts, first)
 			}
+			curSub.closed = true
 		}
-		curSub = nil
+		finalizeSub()
 	}
 	warnings := []string{}
 	for {
@@ -305,8 +376,8 @@ func parsePathData(d string, flat float64, xf func(x, y float64) (float64, float
 			}
 			cur = fpoint{x1, y1}
 			start = cur
-			if curSub != nil {
-				closeSub()
+			if curSub != nil { // finalize previous open subpath without closing
+				finalizeSub()
 			}
 			curSub = &subpath{}
 			subs = append(subs, *curSub)
@@ -484,8 +555,10 @@ func parsePathData(d string, flat float64, xf func(x, y float64) (float64, float
 			warnings = append(warnings, fmt.Sprintf("unsupported cmd %c", c))
 		}
 	}
+	// Do not auto-close trailing subpath; leave open unless explicit 'Z'
+	// (SVG does not implicitly connect last point to first for open paths.)
 	if curSub != nil {
-		closeSub()
+		finalizeSub()
 	}
 	return subs, warnings
 }
@@ -607,75 +680,89 @@ func unicodeLower(r rune) rune {
 }
 
 // --- Emission ---
-func emitC(name, prefix, strategy string, subs []subpath, w, h int, warnings []string) string {
-	sym := prefix + sanitizeIdent(name)
+// emitC now outputs a wrapper function plus one shape-builder per subpath so
+// callers can construct multiple shapes (stroke discontinuities) without
+// heuristics. Pattern:
+//
+//	bool icon_wrapper(vg_shape_t **out, size_t *count);
+//
+// The function allocates *count shapes (via vg_shape_create) that the caller
+// owns. It returns false on allocation failure (frees partial).
+func emitC(name, prefix, strategy string, subs []subpath, w, h int, warnings []string, upscale int, group bool) string {
+	symBase := prefix + sanitizeIdent(name)
 	var b strings.Builder
 	b.WriteString("// Generated icon: " + name + " (" + fmt.Sprint(w, "x", h) + ")\n")
+	b.WriteString(fmt.Sprintf("// Upscale factor: %d\n", upscale))
+	if group {
+		b.WriteString("// Grouped subpaths: yes (multiple SVG subpaths emitted as one vg_path_t with segment breaks)\n")
+	}
 	for _, w := range warnings {
 		b.WriteString("// WARNING: " + w + "\n")
 	}
-	b.WriteString("#include <vg/shape.h>\n#include <vg/primitives.h>\n\n")
-	// Flatten all points
-	var total int
-	for _, sp := range subs {
-		total += len(sp.pts)
-	}
-	if strategy == "array" {
-		b.WriteString("static const pix_point_t " + sym + "_pts[] = {\n")
-		for _, sp := range subs {
+	b.WriteString("#include <vg/shape.h>\n#include <vg/primitives.h>\n#include <vg/vg.h>\n\n")
+	if group {
+		// Single shape: one path containing multiple segments separated via vg_path_break
+		// Emit all points arrays
+		for i, sp := range subs {
+			b.WriteString(fmt.Sprintf("static const pix_point_t %s_p%d[] = {\n", symBase, i))
 			for _, pt := range sp.pts {
 				b.WriteString(fmt.Sprintf("  { %d, %d },\n", clamp16(pt.x), clamp16(pt.y)))
 			}
+			b.WriteString("};\n")
 		}
-		b.WriteString("};\n")
-		b.WriteString("static const uint16_t " + sym + "_offs[] = {\n")
-		off := 0
-		for _, sp := range subs {
-			b.WriteString(fmt.Sprintf("  %d,\n", off))
-			off += len(sp.pts)
+		b.WriteString(fmt.Sprintf("bool %s(vg_shape_t **out, size_t *count) {\n", symBase))
+		b.WriteString("  if(!out||!count) return false; *count=1;\n")
+		b.WriteString("  out[0]=vg_shape_create(); if(!out[0]) return false;\n")
+		// Reserve roughly total points of first subpath; subsequent subpaths start new segments
+		if len(subs) > 0 {
+			b.WriteString(fmt.Sprintf("  if(!vg_shape_path_clear(out[0], %d)) return false;\n", len(subs[0].pts)))
+		} else {
+			b.WriteString("  if(!vg_shape_path_clear(out[0], 4)) return false;\n")
 		}
-		b.WriteString("};\n\n")
-		b.WriteString("bool " + sym + "(vg_shape_t *s) {\n  if(!s) return false;\n  if(!vg_shape_path_clear(s, " + fmt.Sprint(total) + ")) return false;\n  vg_path_t *p = vg_shape_path(s); if(!p) return false;\n  int idx=0;\n")
-		off = 0
-		for _, sp := range subs {
-			b.WriteString("  // subpath\n")
-			for range sp.pts {
-				b.WriteString(fmt.Sprintf("  vg_path_append(p, &%s_pts[idx++], NULL);\n", sym))
+		b.WriteString("  vg_path_t *p = vg_shape_path(out[0]); if(!p) return false;\n")
+		for i, sp := range subs {
+			b.WriteString(fmt.Sprintf("  // subpath %d\n", i))
+			if i > 0 {
+				b.WriteString(fmt.Sprintf("  if(!vg_path_break(p, %d)) return false;\n", len(sp.pts)))
 			}
+			b.WriteString(fmt.Sprintf("  for(int i=0;i<%d;++i){ vg_path_append(p, &%s_p%d[i], NULL); }\n", len(sp.pts), symBase, i))
 		}
 		b.WriteString("  return true;\n}\n")
-	} else { // calls
-		b.WriteString("bool " + sym + "(vg_shape_t *s) {\n  if(!s) return false;\n  size_t reserve = " + fmt.Sprint(total) + ";\n  if(!vg_shape_path_clear(s, reserve)) return false;\n  vg_path_t *p = vg_shape_path(s); if(!p) return false;\n")
-		for _, sp := range subs {
-			b.WriteString("  // subpath\n")
-			// batch points in groups of up to 16 per variadic call
-			batch := []string{}
-			flush := func() {
-				if len(batch) == 0 {
-					return
-				}
-				b.WriteString("  vg_path_append(p, " + strings.Join(batch, ", ") + ", NULL);\n")
-				batch = batch[:0]
-			}
+	} else {
+		// Multi-shape (outline) as before
+		for i, sp := range subs {
+			b.WriteString(fmt.Sprintf("static const pix_point_t %s_p%d[] = {\n", symBase, i))
 			for _, pt := range sp.pts {
-				lit := fmt.Sprintf("&(pix_point_t){%d,%d}", clamp16(pt.x), clamp16(pt.y))
-				batch = append(batch, lit)
-				if len(batch) >= 16 {
-					flush()
-				}
+				b.WriteString(fmt.Sprintf("  { %d, %d },\n", clamp16(pt.x), clamp16(pt.y)))
 			}
-			flush()
+			b.WriteString("};\n")
+		}
+		for i, sp := range subs {
+			total := len(sp.pts)
+			b.WriteString(fmt.Sprintf("static bool %s_build_%d(vg_shape_t *s) {\n  if(!s) return false;\n  if(!vg_shape_path_clear(s, %d)) return false;\n  vg_path_t *p = vg_shape_path(s); if(!p) return false;\n", symBase, i, total))
+			b.WriteString(fmt.Sprintf("  for(int i=0;i<%d;++i){ vg_path_append(p, &%s_p%d[i], NULL); }\n", total, symBase, i))
+			b.WriteString("  return true;\n}\n")
+		}
+		b.WriteString(fmt.Sprintf("bool %s(vg_shape_t **out, size_t *count) {\n", symBase))
+		b.WriteString(fmt.Sprintf("  if(!out||!count) return false; *count=%d;\n", len(subs)))
+		b.WriteString(fmt.Sprintf("  for(size_t i=0;i<%d;++i){ out[i]=vg_shape_create(); if(!out[i]) { for(size_t j=0;j<i;++j) vg_shape_destroy(out[j]); return false; } }\n", len(subs)))
+		for i := range subs {
+			b.WriteString(fmt.Sprintf("  if(!%s_build_%d(out[%d])) return false;\n", symBase, i, i))
 		}
 		b.WriteString("  return true;\n}\n")
 	}
 	return b.String()
 }
 
-func emitHeader(names []string, prefix string) string {
+func emitHeader(names []string, prefix string, upscale int) string {
 	var b strings.Builder
-	b.WriteString("// Generated icons header\n#pragma once\n#include <vg/shape.h>\n\n")
+	b.WriteString("// Generated icons header\n#pragma once\n#include <stddef.h>\n#include <vg/shape.h>\n\n")
+	if upscale < 1 {
+		upscale = 1
+	}
+	b.WriteString(fmt.Sprintf("#ifndef SVG2PIX_UPSCALE\n#define SVG2PIX_UPSCALE %d\n#endif\n\n", upscale))
 	for _, n := range names {
-		b.WriteString("bool " + prefix + sanitizeIdent(n) + "(vg_shape_t *s);\n")
+		b.WriteString("bool " + prefix + sanitizeIdent(n) + "(vg_shape_t **out, size_t *count);\n")
 	}
 	return b.String()
 }

@@ -14,8 +14,8 @@ struct pix_frame_t; /* forward */
 /**
  * @ingroup pix
  * Decode a JPEG from a contiguous memory buffer into a newly allocated frame.
- * On success returns a frame with pixels allocated and frame->finalize set;
- * caller releases with: if(frame->finalize) frame->finalize(frame);
+ * On success returns a frame with pixels allocated and frame->destroy set;
+ * caller releases with: if(frame->destroy) frame->destroy(frame);
  * free(frame);
  */
 struct pix_frame_t *pix_frame_init_jpeg(const void *data, size_t size,
@@ -39,7 +39,7 @@ typedef size_t (*pix_jpeg_read_cb)(void *data, size_t size, void *user_data);
  * request bytes sequentially; the callback should return 0 on EOF or error.
  * The entire decompressed image is written directly into the destination
  * frame (no full-size intermediate RGB buffer). Release the returned frame
- * via frame->finalize then free(). Returns NULL on failure.
+ * via frame->destroy then free(). Returns NULL on failure.
  */
 struct pix_frame_t *pix_frame_init_jpeg_stream(pix_jpeg_read_cb read_cb,
                                                void *user_data,

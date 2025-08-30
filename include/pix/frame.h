@@ -21,10 +21,10 @@
 extern "C" {
 #endif
 
-typedef struct pix_frame_t pix_frame_t;
-
 /* Blit/copy flags */
 typedef enum { PIX_BLIT_NONE = 0u, PIX_BLIT_ALPHA = 1u << 0 } pix_blit_flags_t;
+
+typedef struct pix_frame_t pix_frame_t;
 
 /**
  * @brief A 2D pixel buffer and drawing interface.
@@ -40,11 +40,13 @@ struct pix_frame_t {
   pix_format_t format; /**< Pixel format of the buffer. */
   void *user; /**< Backend-specific context (e.g., SDL renderer/texture). */
 
-  /** Optional finalize hook to release backend-owned resources (textures,
-      pixel buffers, queues). It must NOT free the pix_frame_t object itself.
-      After finalize, the frame can be reinitialized or freed by the caller.
-      May be NULL if no special cleanup needed. */
-  void (*finalize)(struct pix_frame_t *frame);
+  /** Destroy hook to release all backend-owned resources AND free the
+      pix_frame_t object itself. After calling frame->destroy(frame)
+      the pointer becomes invalid and must not be dereferenced. Callers
+      SHOULD set their local variable to NULL after invoking it. May be
+      NULL if the frame has no dynamic resources (then the caller must
+      free the frame manually). */
+  void (*destroy)(struct pix_frame_t *frame);
 
   /**
    * @brief Acquire access to the frame's pixel buffer.
@@ -54,7 +56,7 @@ struct pix_frame_t {
    * Must be called before any drawing that touches pixels. Implementations may
    * map or allocate a CPU-accessible buffer. Nested locks are not supported.
    */
-  bool (*lock)(pix_frame_t *frame);
+  bool (*lock)(struct pix_frame_t *frame);
 
   /**
    * @brief Release the pixel buffer and present it if applicable.
@@ -63,7 +65,7 @@ struct pix_frame_t {
    * After unlock, the pixels pointer may become invalid. Backends typically
    * upload the updated buffer (e.g., SDL texture) and present to the screen.
    */
-  void (*unlock)(pix_frame_t *frame);
+  void (*unlock)(struct pix_frame_t *frame);
 
   /**
    * @brief Set a pixel with straight-alpha src-over blending.
@@ -72,7 +74,8 @@ struct pix_frame_t {
    * @param y Y coordinate [0, height).
    * @param color 0xAARRGGBB.
    */
-  void (*set_pixel)(pix_frame_t *frame, pix_point_t pt, pix_color_t color);
+  void (*set_pixel)(struct pix_frame_t *frame, pix_point_t pt,
+                    pix_color_t color);
 
   /**
    * @brief Read a pixel (no bounds expansion). Returns 0 on OOB.
@@ -89,7 +92,7 @@ struct pix_frame_t {
    * @param x1,y1 End point.
    * @param color 0xAARRGGBB.
    */
-  void (*draw_line)(pix_frame_t *frame, pix_point_t a, pix_point_t b,
+  void (*draw_line)(struct pix_frame_t *frame, pix_point_t a, pix_point_t b,
                     pix_color_t color);
 
   /**

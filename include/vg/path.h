@@ -67,3 +67,21 @@ typedef struct vg_path_t {
  * on invalid args.
  */
 bool vg_path_append(vg_path_t *path, const pix_point_t *first, ...);
+
+/**
+ * @brief Start a new empty subpath (segment) in an existing path.
+ *
+ * A new segment with at least @p reserve capacity (clamped to 4) is
+ * allocated and appended to the end of the segment chain. Subsequent
+ * calls to vg_path_append will append points to this new segment until
+ * it fills (at which point normal doubling allocation applies). This
+ * allows callers (such as code generators) to represent multiple SVG
+ * subpaths inside a single vg_path_t without introducing implicit
+ * connecting edges between the final point of one subpath and the
+ * starting point of the next. Returns false on allocation failure.
+ *
+ * @param path    Target path (must be non-NULL).
+ * @param reserve Desired initial point capacity for the new segment.
+ * @return true on success, false on allocation failure or invalid args.
+ */
+bool vg_path_break(vg_path_t *path, size_t reserve);

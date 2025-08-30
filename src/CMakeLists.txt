@@ -19,17 +19,14 @@ target_include_directories(pix PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tjpgd3/src
 )
 
-find_package(SDL2 REQUIRED)
-
-add_library(pixsdl STATIC
-    pixsdl/frame.c
-    pixsdl/app.c
-)
-target_link_libraries(pixsdl PUBLIC pix ${SDL2_LIBRARIES} m)
-target_include_directories(pixsdl PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/../include   
-    ${SDL2_INCLUDE_DIRS}
-)
+# Include SDL2 backend
+find_package(SDL2)
+if (SDL2_FOUND)
+    target_sources(pix PRIVATE pix/sdl.c)
+    target_include_directories(pix PUBLIC ${SDL2_INCLUDE_DIRS})
+    target_link_libraries(pix PUBLIC ${SDL2_LIBRARIES} m)
+    target_compile_definitions(pix PUBLIC PIX_ENABLE_SDL)
+endif()
 
 # Add icons
 add_subdirectory(icons)

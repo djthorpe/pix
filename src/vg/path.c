@@ -61,9 +61,57 @@ bool vg_path_append(vg_path_t *path, const pix_point_t *first, ...) {
   va_list ap;
   va_start(ap, first);
   while (pt) {
-    append_point_seg(path, *pt);
+    // Find last segment (so segment breaks inserted via vg_path_break are
+    // honored)
+    vg_path_t *tail = path;
+    while (tail->next)
+      tail = tail->next;
+    // Append (may allocate new grown segment if tail full)
+    if (tail->size == tail->capacity) {
+      vg_path_t *n = (vg_path_t *)VG_MALLOC(sizeof(vg_path_t));
+      if (!n) {
+        // Allocation failure: stop early
+        break;
+      }
+      n->capacity = tail->capacity << 1;
+      n->points = VG_MALLOC(sizeof(pix_point_t) * n->capacity);
+      if (!n->points) {
+        VG_FREE(n);
+        break;
+      }
+      n->size = 0;
+      n->next = NULL;
+      tail->next = n;
+      tail = n;
+    }
+    tail->points[tail->size++] = *pt;
     pt = va_arg(ap, const pix_point_t *);
   }
   va_end(ap);
+  return true;
+}
+
+bool vg_path_break(vg_path_t *path, size_t reserve) {
+  if (!path)
+    return false;
+  if (reserve < 4)
+    reserve = 4;
+  // Walk to last segment
+  vg_path_t *seg = path;
+  while (seg->next)
+    seg = seg->next;
+  // Allocate new segment
+  vg_path_t *n = (vg_path_t *)VG_MALLOC(sizeof(vg_path_t));
+  if (!n)
+    return false;
+  n->capacity = reserve;
+  n->points = VG_MALLOC(sizeof(pix_point_t) * n->capacity);
+  if (!n->points) {
+    VG_FREE(n);
+    return false;
+  }
+  n->size = 0;
+  n->next = NULL;
+  seg->next = n;
   return true;
 }
