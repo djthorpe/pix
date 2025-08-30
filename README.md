@@ -5,6 +5,7 @@ Small C library providing:
 * Pixel frame abstraction with pluggable per‑format ops (RGB24, RGBA32, GRAY8, RGB565)
 * Software vector graphics: filled & stroked polylines with AA
 * Optional SDL2 integration examples (window + texture blit)
+* Optional Linux framebuffer backend (/dev/fb0) with demo
 
 ## Features
 
@@ -31,15 +32,21 @@ src/
   pix/    per‑format frame ops + helpers (and SDL backend when enabled)
   vg/     path / fill / primitives / canvas / transform / shape
 examples/
-  sdldemo   simple animated primitives
-  sdltiger  SVG tiger subset (polylines) demo
-  sdlimage  image blit + transform showcase
-  sdlicons  generated icon grid (multi-shape SVG subpaths)
+  sdldemo    simple animated primitives (SDL)
+  sdltiger   SVG tiger subset (polylines) demo (SDL)
+  sdlimage   image blit + transform showcase (SDL)
+  sdlicons   generated icon grid (multi-shape SVG subpaths) (SDL)
+  fbtiger    framebuffer (/dev/fbN) tiger demo (Linux)
 ```
 
 ## Build
 
-Requirements: CMake (>= 3.10), a C compiler, and SDL2 development headers (only needed for the SDL examples / backend).
+Requirements: CMake (>= 3.10), a C compiler.
+
+Optional:
+
+* SDL2 development headers (for SDL backend + SDL examples)
+* Linux with framebuffer device (/dev/fb0) for framebuffer backend + fbtiger
 
 Typical out‑of‑source build:
 
@@ -50,7 +57,7 @@ cmake ..
 make -j
 ```
 
-This produces example executables in `build/examples/*` (`sdldemo`, `sdltiger`, `sdlimage`).
+This produces example executables in `build/examples/*` (SDL: `sdldemo`, `sdltiger`, `sdlimage`, `sdlicons`; Linux fb: `fbtiger`).
 
 If you already have a generated Makefile at the repository root, you can also run:
 
@@ -67,6 +74,19 @@ examples/sdldemo/sdldemo
 ```
 
 Resizable window shows animated AA fills + strokes.
+
+Framebuffer (Linux) tiger demo:
+
+```bash
+sudo ./examples/fbtiger/fbtiger            # uses /dev/fb0 by default
+sudo ./examples/fbtiger/fbtiger /dev/fb1   # alternate framebuffer
+```
+
+Notes:
+
+* Requires read/write access to the framebuffer node (often root).
+* The demo auto-fits, then gently animates scale + rotation; Ctrl+C to exit.
+* Pixel writes are direct; no double buffering provided.
 
 ## Docs (Doxygen)
 

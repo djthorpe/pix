@@ -16,3 +16,8 @@ if (SDL2_FOUND)
 else()
 	message(STATUS "SDL2 not found: SDL examples disabled")
 endif()
+
+# Linux framebuffer example (independent of SDL)
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+	add_subdirectory(examples/fbtiger)
+endif()
