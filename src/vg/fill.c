@@ -1,317 +1,401 @@
-#include <limits.h>
+// Simplified polygon fill (even-odd / non-zero) with optional small gap
+// bridging. All debug / diagnostic instrumentation removed.
 #include <math.h>
-#include <pix/pix.h>
 #include <stdlib.h>
+
+#include <pix/pix.h>
 #include <vg/vg.h>
 
-// Edge for scanline fill
-typedef struct {
-  int y_min, y_max; // inclusive range [y_min, y_max]
-  float x0, y0;     // edge start (y0 == y_min)
-  float inv_slope;  // dx/dy
-  int wind;         // +1 for upward edge, -1 for downward (for NON_ZERO rule)
-} vg_edge_t;
+// Bridging configuration (kept minimal, always enabled):
+static const int FILL_BRIDGE_THRESH = 4; // max empty rows to simple-bridge
+static const int FILL_ADAPTIVE_MAX = 8;  // max empty rows for adaptive bridge
 
-// Intersection record for scanline fill
-typedef struct {
-  float x;
-  int w;
-} xi_t;
-static int xi_cmp(const void *a, const void *b) {
-  const xi_t *pa = (const xi_t *)a;
-  const xi_t *pb = (const xi_t *)b;
-  return (pa->x > pb->x) - (pa->x < pb->x);
-}
+typedef struct SimpleEdge {
+  float x;     // current x at scanline center
+  float dx_dy; // slope (delta x per 1 y)
+  int y_end;   // exclusive end scanline
+  int winding; // +1 / -1 for non-zero fill
+  struct SimpleEdge *next;
+} SimpleEdge;
 
-// Persistent reusable buffers to reduce per-call allocations
-static vg_edge_t *g_edges_buf = NULL;
-static int g_edges_cap = 0; // in elements
-static xi_t *g_xis_buf = NULL;
-static int g_xis_cap = 0; // in elements
+// No debug tinting retained.
 
-static inline bool ensure_edges_capacity(int need) {
-  if (need <= g_edges_cap)
-    return true;
-  int new_cap = g_edges_cap ? g_edges_cap : 256;
-  while (new_cap < need) {
-    new_cap = new_cap + (new_cap >> 1); // 1.5x growth
-    if (new_cap < 0)
-      return false;
-  }
-  void *nb = realloc(g_edges_buf, (size_t)new_cap * sizeof(vg_edge_t));
-  if (!nb)
-    return false;
-  g_edges_buf = (vg_edge_t *)nb;
-  g_edges_cap = new_cap;
-  return true;
-}
-
-static inline bool ensure_xis_capacity(int need) {
-  if (need <= g_xis_cap)
-    return true;
-  int new_cap = g_xis_cap ? g_xis_cap : 256;
-  while (new_cap < need) {
-    new_cap = new_cap + (new_cap >> 1);
-    if (new_cap < 0)
-      return false;
-  }
-  void *nb = realloc(g_xis_buf, (size_t)new_cap * sizeof(xi_t));
-  if (!nb)
-    return false;
-  g_xis_buf = (xi_t *)nb;
-  g_xis_cap = new_cap;
-  return true;
-}
-
-static void add_edge(vg_edge_t *edges, int *edge_count, float x0, float y0,
-                     float x1, float y1) {
-  // Ignore horizontal edges
-  if ((int)y0 == (int)y1)
+static void vg__fill_path_simple(const vg_path_t *path,
+                                 const vg_transform_t *xf, pix_frame_t *frame,
+                                 pix_color_t color, vg_fill_rule_t rule,
+                                 int clip_x0, int clip_y0, int clip_x1,
+                                 int clip_y1) {
+  if (!path)
     return;
-  int wind = (y1 > y0) ? +1 : -1;
-  if (y0 > y1) {
-    float tx = x0;
-    x0 = x1;
-    x1 = tx;
-    float ty = y0;
-    y0 = y1;
-    y1 = ty;
-  }
-  vg_edge_t e;
-  // Half-open coverage using pixel centers (y+0.5): include scanlines where
-  // (y+0.5) >= y0 and (y+0.5) < y1
-  e.y_min = (int)ceilf(y0 - 0.5f);
-  e.y_max = (int)floorf(y1 - 0.5f);
-  if (e.y_min > e.y_max)
-    return;
-  float dy = (y1 - y0);
-  e.inv_slope = (x1 - x0) / dy;
-  e.x0 = x0;
-  e.y0 = y0;
-  e.wind = wind;
-  edges[(*edge_count)++] = e;
-}
-
-static void build_edges_from_path(const vg_path_t *path,
-                                  const vg_transform_t *xform, vg_edge_t *edges,
-                                  int *edge_count) {
+  (void)rule; // rule used later; silence potential unused warnings in trims
+  // 1. Count segments
+  int est = 0;
   const vg_path_t *seg = path;
   while (seg) {
-    for (size_t j = 1; j < seg->size; ++j) {
-      int32_t p0 = seg->points[j - 1];
-      int32_t p1 = seg->points[j];
-      float x0 = (p0 >> 16) & 0xFFFF;
-      float y0 = p0 & 0xFFFF;
-      float x1 = (p1 >> 16) & 0xFFFF;
-      float y1 = p1 & 0xFFFF;
-      if (xform) {
-        float tx0, ty0, tx1, ty1;
-        vg_transform_point(xform, x0, y0, &tx0, &ty0);
-        vg_transform_point(xform, x1, y1, &tx1, &ty1);
+    if (seg->size > 1)
+      est += (int)seg->size;
+    seg = seg->next;
+  }
+  if (est == 0)
+    return;
+  // Temp edge list
+  typedef struct {
+    float x0, y0, x1, y1, dx_dy;
+    int y_start, y_end;
+    int winding;
+  } TmpEdge;
+  TmpEdge *tmp = (TmpEdge *)VG_MALLOC(sizeof(TmpEdge) * est);
+  if (!tmp)
+    return;
+  int ec = 0;
+  float gmin = 1e30f, gmax = -1e30f;
+  seg = path;
+  while (seg) {
+    if (seg->size < 2) {
+      seg = seg->next;
+      continue;
+    }
+    for (size_t i = 1; i < seg->size; i++) {
+      int32_t a = seg->points[i - 1];
+      int32_t b = seg->points[i];
+      float x0 = (int16_t)(a >> 16), y0 = (int16_t)(a & 0xFFFF);
+      float x1 = (int16_t)(b >> 16), y1 = (int16_t)(b & 0xFFFF);
+      if (xf) {
+        float tx0 = xf->m[0][0] * x0 + xf->m[0][1] * y0 + xf->m[0][2];
+        float ty0 = xf->m[1][0] * x0 + xf->m[1][1] * y0 + xf->m[1][2];
+        float tx1 = xf->m[0][0] * x1 + xf->m[0][1] * y1 + xf->m[0][2];
+        float ty1 = xf->m[1][0] * x1 + xf->m[1][1] * y1 + xf->m[1][2];
         x0 = tx0;
         y0 = ty0;
         x1 = tx1;
         y1 = ty1;
       }
-      add_edge(edges, edge_count, x0, y0, x1, y1);
+      if (fabsf(y1 - y0) < 1e-6f)
+        continue; // skip horizontal
+      int winding = 1;
+      if (y0 > y1) { // enforce y0<y1, adjust winding
+        float tx = x0, ty = y0;
+        x0 = x1;
+        y0 = y1;
+        x1 = tx;
+        y1 = ty;
+        winding = -1;
+      }
+      int y_start = (int)ceilf(y0 - 0.5f);
+      int y_end = (int)ceilf(y1 - 0.5f);
+      if (y_end <= y_start)
+        continue;
+      if (y_start < clip_y0)
+        y_start = clip_y0;
+      if (y_end > clip_y1 + 1)
+        y_end = clip_y1 + 1;
+      if (y_start >= y_end)
+        continue;
+      float dx_dy = (x1 - x0) / (y1 - y0);
+      if (y0 < gmin)
+        gmin = y0;
+      if (y1 > gmax)
+        gmax = y1;
+      tmp[ec].x0 = x0;
+      tmp[ec].y0 = y0;
+      tmp[ec].x1 = x1;
+      tmp[ec].y1 = y1;
+      tmp[ec].dx_dy = dx_dy;
+      tmp[ec].y_start = y_start;
+      tmp[ec].y_end = y_end;
+      tmp[ec].winding = winding;
+      // (debug removed)
+      ec++;
     }
     seg = seg->next;
   }
-}
-
-// xi_t and xi_cmp defined above
-
-static inline void intersect_with_frame(int *x0, int *y0, int *x1, int *y1,
-                                        const pix_frame_t *frame) {
-  if (*x0 < 0)
-    *x0 = 0;
-  if (*y0 < 0)
-    *y0 = 0;
-  if (*x1 >= (int)frame->width)
-    *x1 = (int)frame->width - 1;
-  if (*y1 >= (int)frame->height)
-    *y1 = (int)frame->height - 1;
-}
-
-void vg_fill_path_clipped(const vg_path_t *path, const vg_transform_t *xform,
-                          pix_frame_t *frame, uint32_t color,
-                          vg_fill_rule_t rule, int clip_x0, int clip_y0,
-                          int clip_x1, int clip_y1) {
-  if (!path || !frame)
-    return;
-  // Edge budget: worst case edges ~ total points
-  int max_edges = (int)vg_path_count(path) + 8;
-  if (max_edges <= 0)
-    return;
-  if (!ensure_edges_capacity(max_edges))
-    return;
-  vg_edge_t *edges = g_edges_buf;
-  int edge_count = 0;
-  build_edges_from_path(path, xform, edges, &edge_count);
-  if (edge_count <= 0) {
+  if (ec == 0) {
+    VG_FREE(tmp);
     return;
   }
-  // Expect caller to lock; if not locked, we likely have no pixels.
-  if (!frame->pixels || !frame->set_pixel) {
+  // (debug bookkeeping removed)
+  // Buckets
+  int global_y0 =
+      clip_y0 > (int)floorf(gmin - 0.5f) ? clip_y0 : (int)floorf(gmin - 0.5f);
+  int global_y1 =
+      clip_y1 < (int)ceilf(gmax - 0.5f) ? clip_y1 : (int)ceilf(gmax - 0.5f);
+  if (global_y0 > global_y1) {
+    VG_FREE(tmp);
     return;
   }
-
-  // Determine y-range
-  int y_min = INT32_MAX, y_max = INT32_MIN;
-  for (int i = 0; i < edge_count; ++i) {
-    if (edges[i].y_min < y_min)
-      y_min = edges[i].y_min;
-    if (edges[i].y_max > y_max)
-      y_max = edges[i].y_max;
-  }
-  // Intersect scanline range with clip rect and frame
-  int cx0 = clip_x0, cy0 = clip_y0, cx1 = clip_x1, cy1 = clip_y1;
-  intersect_with_frame(&cx0, &cy0, &cx1, &cy1, frame);
-  if (cy0 > cy1 || cx0 > cx1)
-    return;
-  if (y_min < cy0)
-    y_min = cy0;
-  if (y_max > cy1)
-    y_max = cy1;
-  if (y_min > y_max)
-    return;
-
-  // Active Edge Table intersections buffer (reused)
-  if (!ensure_xis_capacity(edge_count)) {
+  int bucket_n = global_y1 - global_y0 + 2;
+  SimpleEdge **buckets =
+      (SimpleEdge **)VG_MALLOC(sizeof(SimpleEdge *) * bucket_n);
+  SimpleEdge *pool = (SimpleEdge *)VG_MALLOC(sizeof(SimpleEdge) * ec);
+  if (!buckets || !pool) {
+    VG_FREE(buckets);
+    VG_FREE(pool);
+    VG_FREE(tmp);
     return;
   }
-  xi_t *xis_buf = g_xis_buf;
-  for (int y = y_min; y <= y_max; ++y) {
-    int n = 0;
-    xi_t *xis = xis_buf;
-    for (int i = 0; i < edge_count; ++i) {
-      if (y >= edges[i].y_min && y <= edges[i].y_max) {
-        float x_at_y =
-            edges[i].x0 + (float)(y + 0.5f - edges[i].y0) * edges[i].inv_slope;
-        xis[n].x = x_at_y;
-        xis[n].w = edges[i].wind;
-        n++;
+  for (int i = 0; i < bucket_n; i++)
+    buckets[i] = NULL;
+  for (int i = 0; i < ec; i++) {
+    TmpEdge *te = &tmp[i];
+    int b = te->y_start - global_y0;
+    if (b < 0 || b >= bucket_n)
+      continue;
+    float x_init = te->x0 + (((float)te->y_start + 0.5f) - te->y0) * te->dx_dy;
+    pool[i].x = x_init;
+    pool[i].dx_dy = te->dx_dy;
+    pool[i].y_end = te->y_end;
+    pool[i].winding = te->winding;
+    pool[i].next = buckets[b];
+    buckets[b] = &pool[i];
+  }
+  SimpleEdge *active = NULL;
+  int *row_min = NULL;
+  int *row_max = NULL;
+  { // allocate span bounds for bridging
+    size_t rows = (size_t)(global_y1 - global_y0 + 1);
+    row_min = (int *)malloc(rows * sizeof(int));
+    row_max = (int *)malloc(rows * sizeof(int));
+    if (row_min && row_max) {
+      for (int i = 0; i <= global_y1 - global_y0; ++i) {
+        row_min[i] = 0x7FFFFFFF;
+        row_max[i] = -0x7FFFFFFF;
       }
     }
-    if (n == 0)
+  }
+  for (int y = global_y0; y <= global_y1; ++y) {
+    // insert
+    int bi = y - global_y0;
+    if (bi >= 0 && bi < bucket_n) {
+      SimpleEdge *e = buckets[bi];
+      while (e) {
+        SimpleEdge *n = e->next;
+        e->next = active;
+        active = e;
+        e = n;
+      }
+    }
+    // prune
+    SimpleEdge **pp = &active;
+    while (*pp) {
+      if (y >= (*pp)->y_end)
+        *pp = (*pp)->next;
+      else
+        pp = &(*pp)->next;
+    }
+    if (!active)
       continue;
-    qsort(xis, n, sizeof(xi_t), xi_cmp);
-    // Coverage-based AA along X using overlap of [x, x+1) with fill interval
-    // Compose alpha by scaling source alpha with coverage.
-    uint8_t base_a = (uint8_t)((color >> 24) & 0xFF);
+    // sort by x (insertion)
+    SimpleEdge *sorted = NULL;
+    SimpleEdge *e = active;
+    while (e) {
+      SimpleEdge *n = e->next;
+      if (!sorted || e->x < sorted->x) {
+        e->next = sorted;
+        sorted = e;
+      } else {
+        SimpleEdge *p = sorted;
+        while (p->next && p->next->x <= e->x)
+          p = p->next;
+        e->next = p->next;
+        p->next = e;
+      }
+      e = n;
+    }
+    active = sorted;
+    int span_count_this_row = 0;
+    // (debug removed)
+    // Build spans
     if (rule == VG_FILL_EVEN_ODD) {
-      for (int i = 0; i + 1 < n; i += 2) {
-        float L = xis[i].x;
-        float R = xis[i + 1].x;
-        if (R <= L)
-          continue;
-        int startx = (int)floorf(L);
-        int endx = (int)floorf(R);
-        // Intersect with clip rect X range
-        if (startx < cx0)
-          startx = cx0;
-        if (endx > cx1)
-          endx = cx1;
-        if (endx < 0 || startx >= (int)frame->width)
-          continue;
-        if (startx < 0)
-          startx = 0;
-        if (endx >= (int)frame->width)
-          endx = (int)frame->width - 1;
-        for (int x = startx; x <= endx; ++x) {
-          float segL = (float)x;
-          float segR = (float)(x + 1);
-          float cov = R;
-          if (cov > segR)
-            cov = segR;
-          float mn = L;
-          if (mn < segL)
-            mn = segL;
-          cov -= mn; // length of overlap in [0,1]
-          if (cov <= 0.0f)
-            continue;
-          if (cov >= 1.0f) {
-            frame->set_pixel(frame, (size_t)x, (size_t)y, color);
-          } else {
-            if (base_a == 0)
-              continue;
-            uint8_t a = (uint8_t)lroundf((float)base_a * cov);
-            uint32_t mod = (color & 0x00FFFFFFu) | ((uint32_t)a << 24);
-            frame->set_pixel(frame, (size_t)x, (size_t)y, mod);
+      int inside = 0;
+      float prev_x = 0.f;
+      for (SimpleEdge *se = active; se; se = se->next) {
+        float x_curr = se->x;
+        if (inside) {
+          float L = prev_x, R = x_curr;
+          if (R > L) {
+            int sx = (int)ceilf(L);
+            int ex = (int)floorf(R - 1e-6f);
+            if (sx < clip_x0)
+              sx = clip_x0;
+            if (ex > clip_x1)
+              ex = clip_x1;
+            if (sx <= ex && y >= clip_y0 && y <= clip_y1) {
+              if (sx < 0)
+                sx = 0;
+              if (ex >= (int)frame->size.w)
+                ex = (int)frame->size.w - 1;
+              if (y >= 0 && y < (int)frame->size.h) {
+                uint32_t *row =
+                    (uint32_t *)((char *)frame->pixels + y * frame->stride);
+                for (int xi = sx; xi <= ex; ++xi)
+                  row[xi] = color;
+                span_count_this_row++;
+                if (row_min && sx < row_min[y - global_y0])
+                  row_min[y - global_y0] = sx;
+                if (row_max && ex > row_max[y - global_y0])
+                  row_max[y - global_y0] = ex;
+                // (debug removed)
+              }
+            }
           }
         }
+        inside = !inside;
+        prev_x = x_curr;
       }
-    } else { // VG_FILL_NON_ZERO
-      int wcount = 0;
-      for (int i = 0; i + 1 < n; ++i) {
-        wcount += xis[i].w;
-        if (wcount != 0) {
-          float L = xis[i].x;
-          float R = xis[i + 1].x;
-          if (R <= L)
-            continue;
-          int startx = (int)floorf(L);
-          int endx = (int)floorf(R);
-          if (startx < cx0)
-            startx = cx0;
-          if (endx > cx1)
-            endx = cx1;
-          if (endx < 0 || startx >= (int)frame->width)
-            continue;
-          if (startx < 0)
-            startx = 0;
-          if (endx >= (int)frame->width)
-            endx = (int)frame->width - 1;
-          for (int x = startx; x <= endx; ++x) {
-            float segL = (float)x;
-            float segR = (float)(x + 1);
-            float cov = R;
-            if (cov > segR)
-              cov = segR;
-            float mn = L;
-            if (mn < segL)
-              mn = segL;
-            cov -= mn;
-            if (cov <= 0.0f)
-              continue;
-            if (cov >= 1.0f) {
-              frame->set_pixel(frame, (size_t)x, (size_t)y, color);
-            } else {
-              if (base_a == 0)
-                continue;
-              uint8_t a = (uint8_t)lroundf((float)base_a * cov);
-              uint32_t mod = (color & 0x00FFFFFFu) | ((uint32_t)a << 24);
-              frame->set_pixel(frame, (size_t)x, (size_t)y, mod);
+    } else { // non-zero winding rule
+      int winding = 0;
+      float prev_x = 0.f;
+      for (SimpleEdge *se = active; se; se = se->next) {
+        float x_curr = se->x;
+        int new_w = winding + se->winding;
+        if ((winding != 0) && (new_w == 0)) {
+          float L = prev_x, R = x_curr;
+          if (R > L) {
+            int sx = (int)ceilf(L);
+            int ex = (int)floorf(R - 1e-6f);
+            if (sx < clip_x0)
+              sx = clip_x0;
+            if (ex > clip_x1)
+              ex = clip_x1;
+            if (sx <= ex && y >= clip_y0 && y <= clip_y1) {
+              if (sx < 0)
+                sx = 0;
+              if (ex >= (int)frame->size.w)
+                ex = (int)frame->size.w - 1;
+              if (y >= 0 && y < (int)frame->size.h) {
+                uint32_t *row =
+                    (uint32_t *)((char *)frame->pixels + y * frame->stride);
+                for (int xi = sx; xi <= ex; ++xi)
+                  row[xi] = color;
+                span_count_this_row++;
+                if (row_min && sx < row_min[y - global_y0])
+                  row_min[y - global_y0] = sx;
+                if (row_max && ex > row_max[y - global_y0])
+                  row_max[y - global_y0] = ex;
+                // (debug removed)
+              }
+            }
+          }
+        }
+        if (winding == 0 && new_w != 0)
+          prev_x = x_curr;
+        winding = new_w;
+      }
+    }
+    // (debug counters removed)
+    // advance
+    for (SimpleEdge *se = active; se; se = se->next)
+      se->x += se->dx_dy;
+  }
+  // Bridging pass: fill short internal empty gaps by extending/interpolating
+  // neighbor coverage (always enabled; previously debug-toggled).
+  if (row_min && row_max && rule == VG_FILL_EVEN_ODD) {
+    int rows = global_y1 - global_y0 + 1;
+    int i = 0;
+    while (i < rows) {
+      // skip filled rows
+      while (i < rows && !(row_min[i] == 0x7FFFFFFF))
+        i++;
+      int gap_start = i;
+      while (i < rows && row_min[i] == 0x7FFFFFFF)
+        i++;
+      int gap_end = i - 1;
+      if (gap_start <= gap_end) {
+        int gap_len = gap_end - gap_start + 1;
+        if (gap_start > 0 && gap_end < rows - 1) {
+          int prev_min = row_min[gap_start - 1];
+          int prev_max = row_max[gap_start - 1];
+          int next_min = row_min[gap_end + 1];
+          int next_max = row_max[gap_end + 1];
+          int have_neighbors =
+              (prev_min != 0x7FFFFFFF && next_min != 0x7FFFFFFF);
+          // 1. Simple small-gap bridge (union of neighbor spans)
+          if (have_neighbors && gap_len <= FILL_BRIDGE_THRESH) {
+            int fill_min = prev_min < next_min ? prev_min : next_min;
+            int fill_max = prev_max > next_max ? prev_max : next_max;
+            if (fill_min <= fill_max) {
+              for (int gy = gap_start; gy <= gap_end; ++gy) {
+                int y = global_y0 + gy;
+                int fmin = fill_min, fmax = fill_max;
+                if (fmin < 0)
+                  fmin = 0;
+                if (fmax >= (int)frame->size.w)
+                  fmax = (int)frame->size.w - 1;
+                uint32_t *rowp =
+                    (uint32_t *)((char *)frame->pixels + y * frame->stride);
+                uint32_t draw_color = color;
+                for (int x = fmin; x <= fmax; ++x)
+                  rowp[x] = draw_color;
+                row_min[gy] = fmin;
+                row_max[gy] = fmax;
+              }
+            }
+          }
+          // 2. Adaptive interpolation for medium gaps beyond threshold
+          else if (have_neighbors && gap_len <= FILL_ADAPTIVE_MAX) {
+            int prev_w = prev_max - prev_min + 1;
+            int next_w = next_max - next_min + 1;
+            int max_allow_w = (prev_w > next_w ? prev_w : next_w) + 2; // guard
+            for (int gy = gap_start; gy <= gap_end; ++gy) {
+              float t = (float)(gy - gap_start + 1) / (float)(gap_len + 1);
+              float fminf = prev_min + t * (next_min - prev_min);
+              float fmaxf = prev_max + t * (next_max - prev_max);
+              int fmin = (int)floorf(fminf + 0.5f);
+              int fmax = (int)floorf(fmaxf + 0.5f);
+              if (fmin > fmax) {
+                // fallback to union bounds
+                fmin = prev_min < next_min ? prev_min : next_min;
+                fmax = prev_max > next_max ? prev_max : next_max;
+              }
+              if (fmax - fmin + 1 > max_allow_w) {
+                // clamp width
+                int center = (fmin + fmax) / 2;
+                int half = max_allow_w / 2;
+                fmin = center - half;
+                fmax = fmin + max_allow_w - 1;
+              }
+              if (fmin < 0)
+                fmin = 0;
+              if (fmax >= (int)frame->size.w)
+                fmax = (int)frame->size.w - 1;
+              int y = global_y0 + gy;
+              if (y >= 0 && y < (int)frame->size.h && fmin <= fmax) {
+                uint32_t *rowp =
+                    (uint32_t *)((char *)frame->pixels + y * frame->stride);
+                uint32_t draw_color = color;
+                for (int x = fmin; x <= fmax; ++x)
+                  rowp[x] = draw_color;
+                row_min[gy] = fmin;
+                row_max[gy] = fmax;
+              }
             }
           }
         }
       }
     }
   }
-
-  // Buffers are persistent; no frees here.
+  VG_FREE(pool);
+  VG_FREE(buckets);
+  VG_FREE(tmp);
+  if (row_min)
+    free(row_min);
+  if (row_max)
+    free(row_max);
 }
 
-void vg_fill_path(const vg_path_t *path, const vg_transform_t *xform,
-                  pix_frame_t *frame, uint32_t color, vg_fill_rule_t rule) {
-  if (!frame)
+void vg_fill_path_clipped(const vg_path_t *path, const vg_transform_t *xf,
+                          pix_frame_t *frame, pix_color_t color,
+                          vg_fill_rule_t rule, pix_point_t clip_min,
+                          pix_point_t clip_max) {
+  if (!frame || !path)
     return;
-  vg_fill_path_clipped(path, xform, frame, color, rule, 0, 0,
-                       (int)frame->width - 1, (int)frame->height - 1);
+  vg__fill_path_simple(path, xf, frame, color, rule, clip_min.x, clip_min.y,
+                       clip_max.x, clip_max.y);
 }
 
-void vg_fill_shape(const struct vg_shape_t *shape, pix_frame_t *frame,
-                   uint32_t color, vg_fill_rule_t rule) {
-  if (!shape || !frame)
-    return;
-  vg_fill_path(&shape->path, shape->transform, frame, color, rule);
-}
-
-void vg_canvas_render_fill(const struct vg_canvas_t *canvas, pix_frame_t *frame,
-                           uint32_t color, vg_fill_rule_t rule) {
-  if (!canvas || !frame)
-    return;
-  for (size_t i = 0; i < canvas->size; ++i) {
-    vg_fill_shape(canvas->shapes[i], frame, color, rule);
-  }
+void vg_fill_path(const vg_path_t *path, const vg_transform_t *xf,
+                  pix_frame_t *frame, pix_color_t color, vg_fill_rule_t rule) {
+  vg_fill_path_clipped(
+      path, xf, frame, color, rule, (pix_point_t){0, 0},
+      (pix_point_t){(int16_t)frame->size.w - 1, (int16_t)frame->size.h - 1});
 }

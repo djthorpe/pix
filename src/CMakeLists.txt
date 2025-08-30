@@ -1,13 +1,22 @@
 add_library(pix STATIC
     pix/frame.c
+    pix/rgb24.c
+    pix/rgba32.c
+    pix/grey8.c
+    pix/rgb565.c
+    pix/image_jpeg.c
     vg/canvas.c
+    vg/shape.c
     vg/path.c
     vg/transform.c
     vg/fill.c
     vg/primitives.c
+    vg/font.c
+    ../third_party/tjpgd3/src/tjpgd.c
 )
 target_include_directories(pix PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/../include        # for <pix/pix.h> <vg/vg.h> and <pixsdl/pixsdl.h>
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include        # <pix/pix.h> <vg/vg.h> 
+    ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tjpgd3/src
 )
 
 find_package(SDL2 REQUIRED)
@@ -18,10 +27,6 @@ add_library(pixsdl STATIC
 )
 target_link_libraries(pixsdl PUBLIC pix ${SDL2_LIBRARIES} m)
 target_include_directories(pixsdl PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/../include        # public pix headers
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include        # <pixsdl/pixsdl.h>
     ${SDL2_INCLUDE_DIRS}
 )
-
-# Propagate required compile defs if any in future
-target_compile_features(pix PUBLIC c_std_99)
-target_compile_features(pixsdl PUBLIC c_std_99)

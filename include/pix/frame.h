@@ -11,26 +11,17 @@
  * Coordinates are zero-based with the origin at the top-left.
  */
 #pragma once
+#include <pix/pix.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <stdlib.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/**
- * @brief Supported pixel formats for a pix_frame_t.
- */
-typedef enum {
-  PIX_FMT_UNKNOWN = 0, /**< Unspecified or unsupported format. */
-  PIX_FMT_RGB888,      /**< 24-bit RGB, 8 bits per channel, no alpha. */
-  PIX_FMT_RGBA8888,    /**< 32-bit RGBA, 8 bits per channel (0xAARRGGBB). */
-  PIX_FMT_GRAY8,       /**< 8-bit grayscale. */
-} pix_format_t;
-
 typedef struct pix_frame_t pix_frame_t;
+
 /**
  * @brief A 2D pixel buffer and drawing interface.
  *
@@ -39,12 +30,17 @@ typedef struct pix_frame_t pix_frame_t;
  * available; otherwise it falls back to its own routines.
  */
 struct pix_frame_t {
-  void *pixels;  /**< Pointer to the first pixel (may be NULL until locked). */
-  size_t width;  /**< Width in pixels. */
-  size_t height; /**< Height in pixels. */
-  size_t stride; /**< Bytes per row (>= width * bytes_per_pixel). */
+  void *pixels; /**< Pointer to the first pixel (may be NULL until locked). */
+  pix_size_t size;     /**< Frame dimensions (w,h) in pixels. */
+  size_t stride;       /**< Bytes per row (>= width * bytes_per_pixel). */
   pix_format_t format; /**< Pixel format of the buffer. */
   void *user; /**< Backend-specific context (e.g., SDL renderer/texture). */
+
+  /** Optional finalize hook to release backend-owned resources (textures,
+      pixel buffers, queues). It must NOT free the pix_frame_t object itself.
+      After finalize, the frame can be reinitialized or freed by the caller.
+      May be NULL if no special cleanup needed. */
+  void (*finalize)(struct pix_frame_t *frame);
 
   /**
    * @brief Acquire access to the frame's pixel buffer.
@@ -72,7 +68,7 @@ struct pix_frame_t {
    * @param y Y coordinate [0, height).
    * @param color 0xAARRGGBB.
    */
-  void (*set_pixel)(pix_frame_t *frame, size_t x, size_t y, uint32_t color);
+  void (*set_pixel)(pix_frame_t *frame, pix_point_t pt, pix_color_t color);
 
   /**
    * @brief Draw a line segment (backend may implement hardware acceleration).
@@ -81,25 +77,53 @@ struct pix_frame_t {
    * @param x1,y1 End point.
    * @param color 0xAARRGGBB.
    */
-  void (*draw_line)(pix_frame_t *frame, size_t x0, size_t y0, size_t x1,
-                    size_t y1, uint32_t color);
+  void (*draw_line)(pix_frame_t *frame, pix_point_t a, pix_point_t b,
+                    pix_color_t color);
 };
 
 /**
  * @name Default implementations
  * @brief Software fallbacks usable by backends.
  * @{ */
+
 /** Set a pixel with straight-alpha src-over blending (0xAARRGGBB). */
-void pix_frame_set_pixel(pix_frame_t *frame, size_t x, size_t y,
-                         uint32_t color);
+void pix_frame_set_pixel(pix_frame_t *frame, pix_point_t pt, pix_color_t color);
+
 /** Draw a line using integer Bresenham (no anti-aliasing). */
-void pix_frame_draw_line(pix_frame_t *frame, size_t x0, size_t y0, size_t x1,
-                         size_t y1, uint32_t color);
+void pix_frame_draw_line(pix_frame_t *frame, pix_point_t a, pix_point_t b,
+                         pix_color_t color);
+
 /** Fill the entire frame with a solid value.
  * For byte-addressable formats, value should be a packed pixel in the
  * frame's format; for GRAY8 it is a single byte replicated across the buffer.
  */
-void pix_frame_clear(pix_frame_t *frame, uint32_t value);
+void pix_frame_clear(pix_frame_t *frame, pix_color_t value);
+
+/** @} */
+
+/**
+ * @name Frame copy (blit) utility
+ * @brief Copy a rectangle of pixels from one frame to another.
+ *
+ * Performs format conversion if needed; if PIX_BLIT_ALPHA is set and the
+ * source has an alpha channel (RGBA32) a src-over blend is applied into the
+ * destination. Otherwise replaces destination pixels. The function clips the
+ * requested region to the bounds of both frames. Returns false only on invalid
+ * parameters (NULL frames). size.w==0 or size.h==0 -> success no-op.
+ *
+ * Locking: Caller must ensure frames are locked (if required by backend).
+ * This routine does not call lock/unlock.
+ */
+/** Blit/copy flags */
+typedef enum {
+  PIX_BLIT_NONE = 0u,      /**< Default copy (convert formats if needed). */
+  PIX_BLIT_ALPHA = 1u << 0 /**< Src-over blend if source has alpha channel. */
+} pix_blit_flags_t;
+
+bool pix_frame_copy(struct pix_frame_t *dst, pix_point_t dst_origin,
+                    const struct pix_frame_t *src, pix_point_t src_origin,
+                    pix_size_t size, pix_blit_flags_t flags);
+
 /** @} */
 
 #ifdef __cplusplus

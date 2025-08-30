@@ -9,6 +9,7 @@
  */
 #pragma once
 #include <SDL2/SDL.h>
+#include <pix/frame.h>
 #include <pix/pix.h>
 #include <stdbool.h>
 
@@ -38,7 +39,7 @@ typedef struct pix_frame_sdl_ctx_t {
  * @param tex Existing streaming SDL_Texture (caller retains ownership).
  * @param w Texture width in pixels.
  * @param h Texture height in pixels.
- * @param fmt Pixel format for the frame (e.g., PIX_FMT_RGBA8888).
+ * @param fmt Pixel format for the frame (e.g., PIX_FMT_RGBA32).
  * @return true on success, false on failure.
  *
  * The frame's function pointers (lock/unlock/set_pixel/draw_line) will be set.
@@ -54,7 +55,7 @@ bool pix_frame_init_sdl(pix_frame_t *frame, SDL_Renderer *ren, SDL_Texture *tex,
  * @param ren SDL renderer used for texture creation and present.
  * @param w Texture width in pixels.
  * @param h Texture height in pixels.
- * @param fmt Pixel format for the frame (e.g., PIX_FMT_RGBA8888).
+ * @param fmt Pixel format for the frame (e.g., PIX_FMT_RGBA32).
  * @return true on success, false on failure.
  *
  * This function creates and owns a streaming SDL_Texture. On
@@ -87,7 +88,9 @@ bool pix_frame_rebind_sdl(pix_frame_t *frame, SDL_Texture *tex, int w, int h);
  * @param frame Frame previously initialized with pix_frame_init_sdl[_auto].
  *
  * Frees the line command queue; if owns_texture is true, also destroys the SDL
- * texture. Does not free the pix_frame_t itself.
+ * texture. Does not free the pix_frame_t itself. This function is also wired
+ * into pix_frame_t::finalize; typical callers should prefer invoking the
+ * finalize hook (if non-NULL) rather than calling this symbol directly.
  */
 void pix_frame_destroy_sdl(pix_frame_t *frame);
 

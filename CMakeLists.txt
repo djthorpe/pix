@@ -7,5 +7,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 # Libraries
 add_subdirectory(src)
 
-# Examples
+# Examples (SDL based)
 add_subdirectory(examples/sdldemo)
+add_subdirectory(examples/tiger)
+add_subdirectory(examples/sdlimage)

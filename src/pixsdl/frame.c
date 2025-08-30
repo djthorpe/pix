@@ -7,8 +7,8 @@ typedef struct sdl_line_cmd_t {
   uint8_t r, g, b, a; // 0xAARRGGBB order mapped to SDL_SetRenderDrawColor RGBA
 } sdl_line_cmd_t;
 
-static void sdl_queue_line(pix_frame_sdl_ctx_t *ctx, int x0, int y0, int x1,
-                           int y1, uint32_t color) {
+static void sdl_queue_line(pix_frame_sdl_ctx_t *ctx, pix_point_t a,
+                           pix_point_t b, pix_color_t color) {
   if (!ctx)
     return;
   if (ctx->line_count == ctx->line_capacity) {
@@ -21,25 +21,25 @@ static void sdl_queue_line(pix_frame_sdl_ctx_t *ctx, int x0, int y0, int x1,
   }
   sdl_line_cmd_t *arr = (sdl_line_cmd_t *)ctx->line_cmds;
   sdl_line_cmd_t *cmd = &arr[ctx->line_count++];
-  cmd->x0 = x0;
-  cmd->y0 = y0;
-  cmd->x1 = x1;
-  cmd->y1 = y1;
+  cmd->x0 = a.x;
+  cmd->y0 = a.y;
+  cmd->x1 = b.x;
+  cmd->y1 = b.y;
   cmd->a = (color >> 24) & 0xFF;
   cmd->r = (color >> 16) & 0xFF;
   cmd->g = (color >> 8) & 0xFF;
   cmd->b = color & 0xFF;
 }
 
-static void pix_frame_sdl_draw_line(pix_frame_t *frame, size_t x0, size_t y0,
-                                    size_t x1, size_t y1, uint32_t color) {
+static void pix_frame_sdl_draw_line(pix_frame_t *frame, pix_point_t a,
+                                    pix_point_t b, pix_color_t color) {
   if (!frame || !frame->user) {
     return;
   }
   pix_frame_sdl_ctx_t *ctx = (pix_frame_sdl_ctx_t *)frame->user;
   // Queue for GPU draw; coordinates are in window space since we render after
   // copying the texture to the renderer with identity transform
-  sdl_queue_line(ctx, (int)x0, (int)y0, (int)x1, (int)y1, color);
+  sdl_queue_line(ctx, a, b, color);
 }
 
 static bool pix_frame_sdl_lock(pix_frame_t *frame) {
@@ -96,8 +96,8 @@ bool pix_frame_init_sdl(pix_frame_t *frame, SDL_Renderer *ren, SDL_Texture *tex,
   ctx->line_capacity = 0;
 
   frame->user = ctx;
-  frame->width = (size_t)w;
-  frame->height = (size_t)h;
+  frame->size.w = (uint16_t)w;
+  frame->size.h = (uint16_t)h;
   frame->format = fmt;
   frame->lock = pix_frame_sdl_lock;
   frame->unlock = pix_frame_sdl_unlock;
@@ -106,6 +106,8 @@ bool pix_frame_init_sdl(pix_frame_t *frame, SDL_Renderer *ren, SDL_Texture *tex,
   frame->draw_line = pix_frame_sdl_draw_line;
   frame->pixels = NULL;
   frame->stride = 0;
+  // Provide cleanup via finalize hook so callers can just call frame->finalize.
+  frame->finalize = pix_frame_destroy_sdl; // legacy name retained for now
   return true;
 }
 
@@ -113,8 +115,8 @@ bool pix_frame_init_sdl_auto(pix_frame_t *frame, SDL_Renderer *ren, int w,
                              int h, pix_format_t fmt) {
   if (!frame || !ren)
     return false;
-  Uint32 sdl_fmt = (fmt == PIX_FMT_RGB888) ? SDL_PIXELFORMAT_RGB888
-                                           : SDL_PIXELFORMAT_ABGR8888;
+  Uint32 sdl_fmt = (fmt == PIX_FMT_RGB24) ? SDL_PIXELFORMAT_RGB888
+                                          : SDL_PIXELFORMAT_ARGB8888;
   SDL_Texture *tex =
       SDL_CreateTexture(ren, sdl_fmt, SDL_TEXTUREACCESS_STREAMING, w, h);
   if (!tex)
@@ -136,8 +138,8 @@ bool pix_frame_resize_sdl(pix_frame_t *frame, int w, int h) {
   // Ensure unlocked before resize
   SDL_UnlockTexture(ctx->texture);
   SDL_DestroyTexture(ctx->texture);
-  Uint32 sdl_fmt = (frame->format == PIX_FMT_RGB888) ? SDL_PIXELFORMAT_RGB888
-                                                     : SDL_PIXELFORMAT_ABGR8888;
+  Uint32 sdl_fmt = (frame->format == PIX_FMT_RGB24) ? SDL_PIXELFORMAT_RGB888
+                                                    : SDL_PIXELFORMAT_ARGB8888;
   SDL_Texture *tex = SDL_CreateTexture(ctx->renderer, sdl_fmt,
                                        SDL_TEXTUREACCESS_STREAMING, w, h);
   if (!tex)
@@ -145,8 +147,8 @@ bool pix_frame_resize_sdl(pix_frame_t *frame, int w, int h) {
   ctx->texture = tex;
   ctx->tex_w = w;
   ctx->tex_h = h;
-  frame->width = (size_t)w;
-  frame->height = (size_t)h;
+  frame->size.w = (uint16_t)w;
+  frame->size.h = (uint16_t)h;
   frame->pixels = NULL;
   frame->stride = 0;
   // Reset any queued GPU lines (coordinates no longer valid)
@@ -165,8 +167,8 @@ bool pix_frame_rebind_sdl(pix_frame_t *frame, SDL_Texture *tex, int w, int h) {
   ctx->tex_w = w;
   ctx->tex_h = h;
   ctx->owns_texture = false;
-  frame->width = (size_t)w;
-  frame->height = (size_t)h;
+  frame->size.w = (uint16_t)w;
+  frame->size.h = (uint16_t)h;
   frame->pixels = NULL;
   frame->stride = 0;
   // Reset any queued GPU lines on rebind
@@ -192,4 +194,5 @@ void pix_frame_destroy_sdl(pix_frame_t *frame) {
   frame->user = NULL;
   frame->pixels = NULL;
   frame->stride = 0;
+  frame->finalize = NULL;
 }

@@ -3,10 +3,34 @@
 #include <pixsdl/pixsdl.h>
 #include <vg/vg.h>
 
+static void free_text_shapes_from(vg_canvas_t *c, size_t start) {
+  if (!c)
+    return;
+  if (start >= c->size)
+    return;
+  for (size_t i = start; i < c->size; ++i) {
+    vg_shape_t *s = c->shapes[i];
+    if (s) {
+      const vg_transform_t *xf = vg_shape_get_transform(s);
+      if (xf)
+        VG_FREE((void *)xf);
+      vg_path_finish(vg_shape_path(s));
+      vg_shape_destroy(s);
+    }
+  }
+  c->size = start;
+}
+
 int main(int argc, char *argv[]) {
+  // Flag: --no-text disables text shape rendering
+  bool disable_text = false;
+  for (int i = 1; i < argc; ++i) {
+    if (strcmp(argv[i], "--no-text") == 0)
+      disable_text = true;
+  }
   int width = 640, height = 480;
   // Use RGBA so per-shape alpha is honored by our software blending
-  sdl_app_t *app = sdl_app_create(width, height, PIX_FMT_RGBA8888, "VG Demo");
+  sdl_app_t *app = sdl_app_create(width, height, PIX_FMT_RGBA32, "VG Demo");
   if (!app) {
     return 1;
   }
@@ -18,49 +42,46 @@ int main(int argc, char *argv[]) {
   int h = side / 2;
   int cr = (width < height ? width : height) / 6; // circle base radius
 
-  vg_shape_t shape;
-  vg_shape_init_rect(&shape, cx - h, cy - h, side, side);
-  shape.transform = NULL;          // set below
-  shape.fill_color = 0xFF0000FF;   // opaque blue fill (0xAARRGGBB)
-  shape.stroke_color = 0xFFFFFFFF; // opaque white stroke
-  shape.stroke_width = 10.0f;      // thicker stroke for visibility
-  shape.stroke_cap = VG_CAP_ROUND;
-  shape.stroke_join = VG_JOIN_ROUND;
-  shape.has_fill = true;
-  shape.has_stroke = true;
+  // Reserve space for animated shapes + optional text
+  vg_canvas_t canvas = vg_canvas_init(256);
+
+  vg_shape_t *shape = vg_canvas_append(&canvas);
+  vg_shape_init_rect(shape, (pix_point_t){(int16_t)(cx - h), (int16_t)(cy - h)},
+                     (pix_size_t){(uint16_t)side, (uint16_t)side});
+  vg_shape_set_transform(shape, NULL); // set below
+  vg_shape_set_fill_color(shape, 0xFF0000FF);
+  vg_shape_set_stroke_color(shape, 0xFFFFFFFF);
+  vg_shape_set_stroke_width(shape, 10.0f);
+  vg_shape_set_stroke_cap(shape, VG_CAP_ROUND);
+  vg_shape_set_stroke_join(shape, VG_JOIN_ROUND);
 
   // Circle that scales up/down at center
-  vg_shape_t circle;
-  vg_shape_init_circle(&circle, cx, cy, cr, 64);
-  circle.transform = NULL;          // set below
-  circle.fill_color = 0x80FF0000;   // 50% alpha red fill (0xAARRGGBB)
-  circle.stroke_color = 0xA0FFFFFF; // ~63% alpha white stroke
-  circle.stroke_width = 8.0f;
-  circle.stroke_cap = VG_CAP_ROUND;
-  circle.stroke_join = VG_JOIN_ROUND;
-  circle.has_fill = true;
-  circle.has_stroke = true;
+  vg_shape_t *circle = vg_canvas_append(&canvas);
+  vg_shape_init_circle(circle, (pix_point_t){(int16_t)cx, (int16_t)cy},
+                       (pix_scalar_t)cr, 64);
+  vg_shape_set_transform(circle, NULL);
+  vg_shape_set_fill_color(circle, 0x80FF0000);
+  vg_shape_set_stroke_color(circle, 0xA0FFFFFF);
+  vg_shape_set_stroke_width(circle, 8.0f);
+  vg_shape_set_stroke_cap(circle, VG_CAP_ROUND);
+  vg_shape_set_stroke_join(circle, VG_JOIN_ROUND);
 
-  vg_canvas_t canvas = vg_canvas_init(8);
-  vg_canvas_append(&canvas, &shape);
-  vg_canvas_append(&canvas, &circle);
   // Green triangle rotating opposite direction
-  vg_shape_t tri;
+  vg_shape_t *tri = vg_canvas_append(&canvas);
   int tx0 = cx, ty0 = cy - h;     // top
   int tx1 = cx - h, ty1 = cy + h; // bottom-left
   int tx2 = cx + h, ty2 = cy + h; // bottom-right
-  vg_shape_init_triangle(&tri, tx0, ty0, tx1, ty1, tx2, ty2);
-  tri.transform = NULL;          // set below
-  tri.fill_color = 0x8000FF00;   // 50% alpha green
-  tri.stroke_color = 0xFFFFFFFF; // white stroke
-  tri.stroke_width = 6.0f;
-  tri.stroke_cap = VG_CAP_ROUND;
-  tri.stroke_join = VG_JOIN_ROUND;
-  tri.has_fill = true;
-  tri.has_stroke = true;
-  vg_canvas_append(&canvas, &tri);
+  vg_shape_init_triangle(tri, (pix_point_t){(int16_t)tx0, (int16_t)ty0},
+                         (pix_point_t){(int16_t)tx1, (int16_t)ty1},
+                         (pix_point_t){(int16_t)tx2, (int16_t)ty2});
+  vg_shape_set_transform(tri, NULL);
+  vg_shape_set_fill_color(tri, 0x8000FF00);
+  vg_shape_set_stroke_color(tri, 0xFFFFFFFF);
+  vg_shape_set_stroke_width(tri, 6.0f);
+  vg_shape_set_stroke_cap(tri, VG_CAP_ROUND);
+  vg_shape_set_stroke_join(tri, VG_JOIN_ROUND);
 
-  // Showcase stroke joins: three thick 5-point stars (bevel, round, miter)
+  // Stroke join showcase: three 5-point stars (bevel, round, miter)
   int demo_w = (width < height ? width : height);
   int rx = (width - (demo_w)) / 2; // center group horizontally
   int margin_top = 40;
@@ -71,88 +92,125 @@ int main(int argc, char *argv[]) {
   int c2x = c1x + (2 * R + gap); // second center x
   int c3x = c2x + (2 * R + gap); // third center x
   int cy0 = margin_top + R;      // common center y
-  vg_shape_t s_bevel, s_round, s_miter;
+  vg_shape_t *s_bevel = vg_canvas_append(&canvas);
+  vg_shape_t *s_round = vg_canvas_append(&canvas);
+  vg_shape_t *s_miter = vg_canvas_append(&canvas);
   // Build stars
   {
     // Bevel star
-    s_bevel.path = vg_path_init(11);
+    *vg_shape_path(s_bevel) = vg_path_init(11);
     for (int i = 0; i < 10; ++i) {
       float ang = (float)i * (float)M_PI / 5.0f - (float)M_PI_2;
       float rad = (i % 2 == 0) ? (float)R : (float)r;
       int px = c1x + (int)lroundf(rad * cosf(ang));
       int py = cy0 + (int)lroundf(rad * sinf(ang));
-      vg_path_append(&s_bevel.path,
+      vg_path_append(vg_shape_path(s_bevel),
                      ((int32_t)(px & 0xFFFF) << 16) | (int32_t)(py & 0xFFFF));
     }
     vg_point_t first1 =
         ((int32_t)(((c1x + (int)lroundf((float)R * cosf(-M_PI_2))) & 0xFFFF)
                    << 16) |
          (int32_t)(((cy0 + (int)lroundf((float)R * sinf(-M_PI_2))) & 0xFFFF)));
-    vg_path_append(&s_bevel.path, first1);
+    vg_path_append(vg_shape_path(s_bevel), first1);
 
     // Round star
-    s_round.path = vg_path_init(11);
+    *vg_shape_path(s_round) = vg_path_init(11);
     for (int i = 0; i < 10; ++i) {
       float ang = (float)i * (float)M_PI / 5.0f - (float)M_PI_2;
       float rad = (i % 2 == 0) ? (float)R : (float)r;
       int px = c2x + (int)lroundf(rad * cosf(ang));
       int py = cy0 + (int)lroundf(rad * sinf(ang));
-      vg_path_append(&s_round.path,
+      vg_path_append(vg_shape_path(s_round),
                      ((int32_t)(px & 0xFFFF) << 16) | (int32_t)(py & 0xFFFF));
     }
     vg_point_t first2 =
         ((int32_t)(((c2x + (int)lroundf((float)R * cosf(-M_PI_2))) & 0xFFFF)
                    << 16) |
          (int32_t)(((cy0 + (int)lroundf((float)R * sinf(-M_PI_2))) & 0xFFFF)));
-    vg_path_append(&s_round.path, first2);
+    vg_path_append(vg_shape_path(s_round), first2);
 
     // Miter star
-    s_miter.path = vg_path_init(11);
+    *vg_shape_path(s_miter) = vg_path_init(11);
     for (int i = 0; i < 10; ++i) {
       float ang = (float)i * (float)M_PI / 5.0f - (float)M_PI_2;
       float rad = (i % 2 == 0) ? (float)R : (float)r;
       int px = c3x + (int)lroundf(rad * cosf(ang));
       int py = cy0 + (int)lroundf(rad * sinf(ang));
-      vg_path_append(&s_miter.path,
+      vg_path_append(vg_shape_path(s_miter),
                      ((int32_t)(px & 0xFFFF) << 16) | (int32_t)(py & 0xFFFF));
     }
     vg_point_t first3 =
         ((int32_t)(((c3x + (int)lroundf((float)R * cosf(-M_PI_2))) & 0xFFFF)
                    << 16) |
          (int32_t)(((cy0 + (int)lroundf((float)R * sinf(-M_PI_2))) & 0xFFFF)));
-    vg_path_append(&s_miter.path, first3);
+    vg_path_append(vg_shape_path(s_miter), first3);
   }
-  s_bevel.fill_color = VG_COLOR_NONE;
-  s_bevel.stroke_color = 0xFF66FF66; // green-ish
-  s_bevel.stroke_width = 30.0f;
-  s_bevel.stroke_cap = VG_CAP_BUTT;
-  s_bevel.stroke_join = VG_JOIN_BEVEL;
-  s_bevel.miter_limit = 4.0f;
-  s_bevel.transform = NULL;
-  s_bevel.has_fill = false;
-  s_bevel.has_stroke = true;
-  s_round.fill_color = VG_COLOR_NONE;
-  s_round.stroke_color = 0xFF66AAFF; // blue-ish
-  s_round.stroke_width = 30.0f;
-  s_round.stroke_cap = VG_CAP_BUTT;
-  s_round.stroke_join = VG_JOIN_ROUND;
-  s_round.miter_limit = 4.0f;
-  s_round.transform = NULL;
-  s_round.has_fill = false;
-  s_round.has_stroke = true;
+  vg_shape_set_fill_color(s_bevel, VG_COLOR_NONE);
+  vg_shape_set_stroke_color(s_bevel, 0xFF66FF66);
+  vg_shape_set_stroke_width(s_bevel, 30.0f);
+  vg_shape_set_stroke_cap(s_bevel, VG_CAP_BUTT);
+  vg_shape_set_stroke_join(s_bevel, VG_JOIN_BEVEL);
+  vg_shape_set_miter_limit(s_bevel, 4.0f);
+  vg_shape_set_transform(s_bevel, NULL);
+  vg_shape_set_fill_color(s_round, VG_COLOR_NONE);
+  vg_shape_set_stroke_color(s_round, 0xFF66AAFF);
+  vg_shape_set_stroke_width(s_round, 30.0f);
+  vg_shape_set_stroke_cap(s_round, VG_CAP_BUTT);
+  vg_shape_set_stroke_join(s_round, VG_JOIN_ROUND);
+  vg_shape_set_miter_limit(s_round, 4.0f);
+  vg_shape_set_transform(s_round, NULL);
   // Miter star (with high limit)
-  s_miter.fill_color = VG_COLOR_NONE;
-  s_miter.stroke_color = 0xFFFF6666; // red-ish
-  s_miter.stroke_width = 30.0f;
-  s_miter.stroke_cap = VG_CAP_BUTT;
-  s_miter.stroke_join = VG_JOIN_MITER;
-  s_miter.miter_limit = 10.0f; // allow very pointy tips
-  s_miter.transform = NULL;
-  s_miter.has_fill = false;
-  s_miter.has_stroke = true;
-  vg_canvas_append(&canvas, &s_bevel);
-  vg_canvas_append(&canvas, &s_round);
-  vg_canvas_append(&canvas, &s_miter);
+  vg_shape_set_fill_color(s_miter, VG_COLOR_NONE);
+  vg_shape_set_stroke_color(s_miter, 0xFFFF6666);
+  vg_shape_set_stroke_width(s_miter, 30.0f);
+  vg_shape_set_stroke_cap(s_miter, VG_CAP_BUTT);
+  vg_shape_set_stroke_join(s_miter, VG_JOIN_MITER);
+  vg_shape_set_miter_limit(s_miter, 10.0f);
+  vg_shape_set_transform(s_miter, NULL);
+
+  // Remember count before appending text
+  size_t base_shapes = canvas.size;
+
+  // Append centered demo text
+  const char *demo_text = "PIX VECTOR FONT DEMO";
+  float text_px = 48.0f; // target pixel height
+  float txt_w = 0.0f;
+  vg_shape_t *text_shape_center = NULL; // owned clone we append (centered)
+  vg_shape_t *text_shape = NULL;
+  if (!disable_text)
+    text_shape = vg_font_get_text_shape_cached(
+        &vg_font_tiny5x7, demo_text, 0xFFFFFFFFu, text_px, 1.0f, &txt_w);
+  if (text_shape) {
+    text_shape_center = vg_shape_create();
+    if (text_shape_center) {
+      *vg_shape_path(text_shape_center) =
+          *vg_shape_path(text_shape); // shallow path copy
+      // Centering transform = translate * (glyph scale)
+      vg_transform_t *xf = (vg_transform_t *)VG_MALLOC(sizeof(vg_transform_t));
+      if (xf) {
+        vg_transform_t tr;
+        float scale_text = text_px / 7.0f;      // glyph EM height = 7
+        float baseline = (float)height - 20.0f; // bottom margin
+        float ty = baseline - scale_text * vg_font_tiny5x7.ascent;
+        vg_transform_translate(&tr, (width - txt_w) * 0.5f, ty);
+        const vg_transform_t *orig_xf = vg_shape_get_transform(text_shape);
+        if (orig_xf) {
+          vg_transform_multiply(xf, &tr, orig_xf); // T * S
+        } else {
+          *xf = tr;
+        }
+        vg_shape_set_transform(text_shape_center, xf);
+        if (canvas.size < canvas.capacity) {
+          canvas.shapes[canvas.size++] =
+              text_shape_center; // adopt external shape
+        }
+      } else {
+        vg_path_finish(vg_shape_path(text_shape_center));
+        vg_shape_destroy(text_shape_center);
+        text_shape_center = NULL;
+      }
+    }
+  }
 
   pix_frame_t *frame = sdl_app_get_frame(app);
 
@@ -161,9 +219,9 @@ int main(int argc, char *argv[]) {
   vg_transform_t circle_xform, tri_xform, scl; // reuse centers for both
   vg_transform_translate(&t_center, (float)cx, (float)cy);
   vg_transform_translate(&t_neg_center, (float)-cx, (float)-cy);
-  shape.transform = &transform;
-  circle.transform = &circle_xform;
-  tri.transform = &tri_xform;
+  vg_shape_set_transform(shape, &transform);
+  vg_shape_set_transform(circle, &circle_xform);
+  vg_shape_set_transform(tri, &tri_xform);
 
   uint32_t clear_color = 0x00000000; // transparent black background
 
@@ -179,7 +237,7 @@ int main(int argc, char *argv[]) {
     if (new_w != width || new_h != height) {
       width = new_w;
       height = new_h;
-      // Recompute center-based transforms
+      // Window resized: recompute geometry & transforms
       cx = width / 2;
       cy = height / 2;
       side = (width < height ? width : height) / 3;
@@ -188,46 +246,45 @@ int main(int argc, char *argv[]) {
       vg_transform_translate(&t_center, (float)cx, (float)cy);
       vg_transform_translate(&t_neg_center, (float)-cx, (float)-cy);
       // Rebuild square at new size
-      vg_path_finish(&shape.path);
-      vg_shape_init_rect(&shape, cx - h, cy - h, side, side);
-      shape.fill_color = 0xFF0000FF;   // opaque blue fill
-      shape.stroke_color = 0xFFFFFFFF; // opaque white stroke
-      shape.stroke_width = 10.0f;      // thicker stroke for visibility
-      shape.stroke_cap = VG_CAP_ROUND;
-      shape.stroke_join = VG_JOIN_ROUND;
-      shape.has_fill = true;
-      shape.has_stroke = true;
-      shape.transform = &transform; // rebind transform after re-init
-      // Rebuild circle at new size
-      vg_path_finish(&circle.path);
-      vg_shape_init_circle(&circle, cx, cy, cr, 64);
-      circle.fill_color = 0x80FF0000;
-      circle.stroke_color = 0xA0FFFFFF;
-      circle.stroke_width = 8.0f;
-      circle.stroke_cap = VG_CAP_ROUND;
-      circle.stroke_join = VG_JOIN_ROUND;
-      circle.has_fill = true;
-      circle.has_stroke = true;
-      circle.transform = &circle_xform; // rebind transform after re-init
-                                        // Rebuild triangle at new size
-      vg_path_finish(&tri.path);
+      vg_path_finish(vg_shape_path(shape));
+      vg_shape_init_rect(shape,
+                         (pix_point_t){(int16_t)(cx - h), (int16_t)(cy - h)},
+                         (pix_size_t){(uint16_t)side, (uint16_t)side});
+      vg_shape_set_fill_color(shape, 0xFF0000FF);
+      vg_shape_set_stroke_color(shape, 0xFFFFFFFF);
+      vg_shape_set_stroke_width(shape, 10.0f);
+      vg_shape_set_stroke_cap(shape, VG_CAP_ROUND);
+      vg_shape_set_stroke_join(shape, VG_JOIN_ROUND);
+      vg_shape_set_transform(shape, &transform); // rebind transform
+                                                 // Rebuild circle at new size
+      vg_path_finish(vg_shape_path(circle));
+      vg_shape_init_circle(circle, (pix_point_t){(int16_t)cx, (int16_t)cy},
+                           (pix_scalar_t)cr, 64);
+      vg_shape_set_fill_color(circle, 0x80FF0000);
+      vg_shape_set_stroke_color(circle, 0xA0FFFFFF);
+      vg_shape_set_stroke_width(circle, 8.0f);
+      vg_shape_set_stroke_cap(circle, VG_CAP_ROUND);
+      vg_shape_set_stroke_join(circle, VG_JOIN_ROUND);
+      vg_shape_set_transform(circle, &circle_xform);
+      // Rebuild triangle at new size
+      vg_path_finish(vg_shape_path(tri));
       tx0 = cx;
       ty0 = cy - h;
       tx1 = cx - h;
       ty1 = cy + h;
       tx2 = cx + h;
       ty2 = cy + h;
-      vg_shape_init_triangle(&tri, tx0, ty0, tx1, ty1, tx2, ty2);
-      tri.fill_color = 0x8000FF00;
-      tri.stroke_color = 0xFFFFFFFF;
-      tri.stroke_width = 6.0f;
-      tri.stroke_cap = VG_CAP_ROUND;
-      tri.stroke_join = VG_JOIN_ROUND;
-      tri.has_fill = true;
-      tri.has_stroke = true;
-      tri.transform = &tri_xform; // rebind transform after re-init
+      vg_shape_init_triangle(tri, (pix_point_t){(int16_t)tx0, (int16_t)ty0},
+                             (pix_point_t){(int16_t)tx1, (int16_t)ty1},
+                             (pix_point_t){(int16_t)tx2, (int16_t)ty2});
+      vg_shape_set_fill_color(tri, 0x8000FF00);
+      vg_shape_set_stroke_color(tri, 0xFFFFFFFF);
+      vg_shape_set_stroke_width(tri, 6.0f);
+      vg_shape_set_stroke_cap(tri, VG_CAP_ROUND);
+      vg_shape_set_stroke_join(tri, VG_JOIN_ROUND);
+      vg_shape_set_transform(tri, &tri_xform);
 
-      // Recompute join demo stars on resize
+      // Rebuild join demo stars
       demo_w = (width < height ? width : height);
       rx = (width - (demo_w)) / 2;
       margin_top = 40;
@@ -239,14 +296,14 @@ int main(int argc, char *argv[]) {
       c3x = c2x + (2 * R + gap);
       cy0 = margin_top + R;
       // Rebuild each star
-      vg_path_finish(&s_bevel.path);
-      s_bevel.path = vg_path_init(11);
+      vg_path_finish(vg_shape_path(s_bevel));
+      *vg_shape_path(s_bevel) = vg_path_init(11);
       for (int i = 0; i < 10; ++i) {
         float ang = (float)i * (float)M_PI / 5.0f - (float)M_PI_2;
         float rad = (i % 2 == 0) ? (float)R : (float)r;
         int px = c1x + (int)lroundf(rad * cosf(ang));
         int py = cy0 + (int)lroundf(rad * sinf(ang));
-        vg_path_append(&s_bevel.path,
+        vg_path_append(vg_shape_path(s_bevel),
                        ((int32_t)(px & 0xFFFF) << 16) | (int32_t)(py & 0xFFFF));
       }
       {
@@ -255,25 +312,23 @@ int main(int argc, char *argv[]) {
                        << 16) |
              (int32_t)(((cy0 + (int)lroundf((float)R * sinf(-M_PI_2))) &
                         0xFFFF)));
-        vg_path_append(&s_bevel.path, first);
+        vg_path_append(vg_shape_path(s_bevel), first);
       }
-      s_bevel.fill_color = VG_COLOR_NONE;
-      s_bevel.stroke_color = 0xFF66FF66;
-      s_bevel.stroke_width = 30.0f;
-      s_bevel.stroke_cap = VG_CAP_BUTT;
-      s_bevel.stroke_join = VG_JOIN_BEVEL;
-      s_bevel.miter_limit = 4.0f;
-      s_bevel.transform = NULL;
-      s_bevel.has_fill = false;
-      s_bevel.has_stroke = true;
-      vg_path_finish(&s_round.path);
-      s_round.path = vg_path_init(11);
+      vg_shape_set_fill_color(s_bevel, VG_COLOR_NONE);
+      vg_shape_set_stroke_color(s_bevel, 0xFF66FF66);
+      vg_shape_set_stroke_width(s_bevel, 30.0f);
+      vg_shape_set_stroke_cap(s_bevel, VG_CAP_BUTT);
+      vg_shape_set_stroke_join(s_bevel, VG_JOIN_BEVEL);
+      vg_shape_set_miter_limit(s_bevel, 4.0f);
+      vg_shape_set_transform(s_bevel, NULL);
+      vg_path_finish(vg_shape_path(s_round));
+      *vg_shape_path(s_round) = vg_path_init(11);
       for (int i = 0; i < 10; ++i) {
         float ang = (float)i * (float)M_PI / 5.0f - (float)M_PI_2;
         float rad = (i % 2 == 0) ? (float)R : (float)r;
         int px = c2x + (int)lroundf(rad * cosf(ang));
         int py = cy0 + (int)lroundf(rad * sinf(ang));
-        vg_path_append(&s_round.path,
+        vg_path_append(vg_shape_path(s_round),
                        ((int32_t)(px & 0xFFFF) << 16) | (int32_t)(py & 0xFFFF));
       }
       {
@@ -282,25 +337,23 @@ int main(int argc, char *argv[]) {
                        << 16) |
              (int32_t)(((cy0 + (int)lroundf((float)R * sinf(-M_PI_2))) &
                         0xFFFF)));
-        vg_path_append(&s_round.path, first);
+        vg_path_append(vg_shape_path(s_round), first);
       }
-      s_round.fill_color = VG_COLOR_NONE;
-      s_round.stroke_color = 0xFF66AAFF;
-      s_round.stroke_width = 30.0f;
-      s_round.stroke_cap = VG_CAP_BUTT;
-      s_round.stroke_join = VG_JOIN_ROUND;
-      s_round.miter_limit = 4.0f;
-      s_round.transform = NULL;
-      s_round.has_fill = false;
-      s_round.has_stroke = true;
-      vg_path_finish(&s_miter.path);
-      s_miter.path = vg_path_init(11);
+      vg_shape_set_fill_color(s_round, VG_COLOR_NONE);
+      vg_shape_set_stroke_color(s_round, 0xFF66AAFF);
+      vg_shape_set_stroke_width(s_round, 30.0f);
+      vg_shape_set_stroke_cap(s_round, VG_CAP_BUTT);
+      vg_shape_set_stroke_join(s_round, VG_JOIN_ROUND);
+      vg_shape_set_miter_limit(s_round, 4.0f);
+      vg_shape_set_transform(s_round, NULL);
+      vg_path_finish(vg_shape_path(s_miter));
+      *vg_shape_path(s_miter) = vg_path_init(11);
       for (int i = 0; i < 10; ++i) {
         float ang = (float)i * (float)M_PI / 5.0f - (float)M_PI_2;
         float rad = (i % 2 == 0) ? (float)R : (float)r;
         int px = c3x + (int)lroundf(rad * cosf(ang));
         int py = cy0 + (int)lroundf(rad * sinf(ang));
-        vg_path_append(&s_miter.path,
+        vg_path_append(vg_shape_path(s_miter),
                        ((int32_t)(px & 0xFFFF) << 16) | (int32_t)(py & 0xFFFF));
       }
       {
@@ -309,20 +362,43 @@ int main(int argc, char *argv[]) {
                        << 16) |
              (int32_t)(((cy0 + (int)lroundf((float)R * sinf(-M_PI_2))) &
                         0xFFFF)));
-        vg_path_append(&s_miter.path, first);
+        vg_path_append(vg_shape_path(s_miter), first);
       }
-      s_miter.fill_color = VG_COLOR_NONE;
-      s_miter.stroke_color = 0xFFFF6666;
-      s_miter.stroke_width = 30.0f;
-      s_miter.stroke_cap = VG_CAP_BUTT;
-      s_miter.stroke_join = VG_JOIN_MITER;
-      s_miter.miter_limit = 10.0f;
-      s_miter.transform = NULL;
-      s_miter.has_fill = false;
-      s_miter.has_stroke = true;
+      vg_shape_set_fill_color(s_miter, VG_COLOR_NONE);
+      vg_shape_set_stroke_color(s_miter, 0xFFFF6666);
+      vg_shape_set_stroke_width(s_miter, 30.0f);
+      vg_shape_set_stroke_cap(s_miter, VG_CAP_BUTT);
+      vg_shape_set_stroke_join(s_miter, VG_JOIN_MITER);
+      vg_shape_set_miter_limit(s_miter, 10.0f);
+      vg_shape_set_transform(s_miter, NULL);
+
+      // Recenter existing text (preserve scale)
+      if (text_shape_center) {
+        const vg_transform_t *old_xf =
+            vg_shape_get_transform(text_shape_center);
+        if (old_xf)
+          VG_FREE((void *)old_xf);
+        vg_transform_t *xf =
+            (vg_transform_t *)VG_MALLOC(sizeof(vg_transform_t));
+        if (xf) {
+          vg_transform_t tr;
+          float scale_text = text_px / 7.0f;
+          float baseline = (float)height - 20.0f;
+          float ty = baseline - scale_text * vg_font_tiny5x7.ascent;
+          vg_transform_translate(&tr, (width - txt_w) * 0.5f, ty);
+          if (text_shape && vg_shape_get_transform(text_shape)) {
+            vg_transform_multiply(xf, &tr, vg_shape_get_transform(text_shape));
+          } else {
+            *xf = tr;
+          }
+          vg_shape_set_transform(text_shape_center, xf);
+        } else {
+          vg_shape_set_transform(text_shape_center, NULL);
+        }
+      }
     }
 
-    // time-based rotation (square) and scaling (circle)
+    // Animate transforms
     float t = (sdl_app_ticks(app) - start) / 1000.0f;
     vg_transform_rotate(&rot, t);
     vg_transform_multiply(&tmp, &rot, &t_neg_center);
@@ -332,31 +408,32 @@ int main(int argc, char *argv[]) {
     vg_transform_multiply(&tmp, &rot_neg, &t_neg_center);
     vg_transform_multiply(&tri_xform, &t_center, &tmp);
 
-    // Circle pulsates: scale between 0.6 and 1.4
+    // Circle pulsates
     float s = 1.0f + 0.4f * sinf(t * 2.0f);
     vg_transform_scale(&scl, s, s);
     vg_transform_multiply(&tmp, &scl, &t_neg_center);
     vg_transform_multiply(&circle_xform, &t_center, &tmp);
 
-    // Lock -> draw -> unlock/present
+    // Render frame
     if (!frame->lock(frame)) {
       break;
     }
     pix_frame_clear(frame, clear_color);
-    vg_canvas_render_all(&canvas, frame, 0xFFFFFFFFu, /* no fallback fill */
-                         0xFFFFFFFFu, /* fallback stroke white */
-                         VG_FILL_EVEN_ODD);
+    vg_canvas_render(&canvas, frame);
+    // (Vector text only; debug bitmap path removed)
     frame->unlock(frame);
 
     sdl_app_delay(app, 16); // ~60 FPS
   }
 
   // Cleanup
-  vg_path_finish(&shape.path);
-  vg_path_finish(&circle.path);
-  vg_path_finish(&s_bevel.path);
-  vg_path_finish(&s_round.path);
-  vg_path_finish(&s_miter.path);
+  vg_path_finish(vg_shape_path(shape));
+  vg_path_finish(vg_shape_path(circle));
+  vg_path_finish(vg_shape_path(s_bevel));
+  vg_path_finish(vg_shape_path(s_round));
+  vg_path_finish(vg_shape_path(s_miter));
+  // Free text glyph shapes
+  free_text_shapes_from(&canvas, base_shapes);
   sdl_app_destroy(app);
   return 0;
 }

@@ -7,12 +7,17 @@
 #define VG_FREE free
 #endif
 
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <stdlib.h>
-#include <vg/canvas.h>
-#include <vg/fill.h>
-#include <vg/path.h>
-#include <vg/primitives.h>
-#include <vg/shape.h>
-#include <vg/transform.h>
 
-#define VG_COLOR_NONE 0xDEADBEEFu
+#include "canvas.h"
+#include "fill.h"
+#include "font.h"
+#include "path.h"
+#include "primitives.h"
+#include "shape.h"
+#include "transform.h"
+
+#define VG_COLOR_NONE ((pix_color_t)0x00000000u)

@@ -1,4 +1,5 @@
 #pragma once
+#include <pix/frame.h>
 #include <pix/pix.h>
 #include <stdbool.h>
 #include <stdint.h>

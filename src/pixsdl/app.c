@@ -12,6 +12,30 @@ struct sdl_app_t {
   int height;
 };
 
+// Internal helper to (re)create streaming texture & rebind frame after a
+// window size change. Keeps blend mode consistent and updates stored width/
+// height. Returns true on success.
+static bool sdl_app_resize_texture(sdl_app_t *app, int new_w, int new_h) {
+  if (!app || new_w <= 0 || new_h <= 0)
+    return false;
+  Uint32 sdl_fmt = (app->frame.format == PIX_FMT_RGB24)
+                       ? SDL_PIXELFORMAT_RGB24
+                       : SDL_PIXELFORMAT_ARGB8888;
+  SDL_Texture *new_tex = SDL_CreateTexture(
+      app->renderer, sdl_fmt, SDL_TEXTUREACCESS_STREAMING, new_w, new_h);
+  if (!new_tex)
+    return false;
+  if (app->texture)
+    SDL_DestroyTexture(app->texture);
+  app->texture = new_tex;
+  SDL_SetTextureBlendMode(app->texture, SDL_BLENDMODE_NONE);
+  // Rebind frame to new texture (frame does not own texture in this model)
+  pix_frame_rebind_sdl(&app->frame, app->texture, new_w, new_h);
+  app->width = new_w;
+  app->height = new_h;
+  return true;
+}
+
 sdl_app_t *sdl_app_create(int width, int height, pix_format_t fmt,
                           const char *title) {
   sdl_app_t *app = (sdl_app_t *)malloc(sizeof(*app));
@@ -31,8 +55,8 @@ sdl_app_t *sdl_app_create(int width, int height, pix_format_t fmt,
   if (title)
     SDL_SetWindowTitle(app->window, title);
 
-  Uint32 sdl_fmt = (fmt == PIX_FMT_RGB888) ? SDL_PIXELFORMAT_RGB24
-                                           : SDL_PIXELFORMAT_ABGR8888;
+  Uint32 sdl_fmt =
+      (fmt == PIX_FMT_RGB24) ? SDL_PIXELFORMAT_RGB24 : SDL_PIXELFORMAT_ARGB8888;
   app->texture = SDL_CreateTexture(app->renderer, sdl_fmt,
                                    SDL_TEXTUREACCESS_STREAMING, width, height);
   if (!app->texture) {
@@ -62,7 +86,11 @@ sdl_app_t *sdl_app_create(int width, int height, pix_format_t fmt,
 void sdl_app_destroy(sdl_app_t *app) {
   if (!app)
     return;
-  pix_frame_destroy_sdl(&app->frame);
+  // Use the finalize hook (backend provided) instead of direct destroy.
+  // This keeps sdl_app agnostic of the concrete frame backend cleanup.
+  if (app->frame.finalize) {
+    app->frame.finalize(&app->frame);
+  }
   if (app->texture)
     SDL_DestroyTexture(app->texture);
   if (app->renderer)
@@ -99,22 +127,7 @@ bool sdl_app_poll_should_close(sdl_app_t *app) {
     if (e.type == SDL_WINDOWEVENT &&
         (e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED ||
          e.window.event == SDL_WINDOWEVENT_RESIZED)) {
-      int new_w = e.window.data1;
-      int new_h = e.window.data2;
-      Uint32 sdl_fmt = (app->frame.format == PIX_FMT_RGB888)
-                           ? SDL_PIXELFORMAT_RGB24
-                           : SDL_PIXELFORMAT_ABGR8888;
-      SDL_Texture *new_tex = SDL_CreateTexture(
-          app->renderer, sdl_fmt, SDL_TEXTUREACCESS_STREAMING, new_w, new_h);
-      if (new_tex) {
-        if (app->texture)
-          SDL_DestroyTexture(app->texture);
-        app->texture = new_tex;
-        SDL_SetTextureBlendMode(app->texture, SDL_BLENDMODE_NONE);
-        pix_frame_rebind_sdl(&app->frame, app->texture, new_w, new_h);
-        app->width = new_w;
-        app->height = new_h;
-      }
+      sdl_app_resize_texture(app, e.window.data1, e.window.data2);
     }
   }
   return false;
@@ -123,6 +136,15 @@ bool sdl_app_poll_should_close(sdl_app_t *app) {
 void sdl_app_get_size(sdl_app_t *app, int *out_w, int *out_h) {
   if (!app)
     return;
+  // Query actual window size; if SDL was resized but events handled elsewhere
+  // (custom loop), we still catch it here and refresh the texture.
+  int real_w = 0, real_h = 0;
+  SDL_GetWindowSize(app->window, &real_w, &real_h);
+  if ((real_w > 0 && real_h > 0) &&
+      (real_w != app->width || real_h != app->height)) {
+    // Attempt resize; ignore failure (keep old texture)
+    sdl_app_resize_texture(app, real_w, real_h);
+  }
   if (out_w)
     *out_w = app->width;
   if (out_h)

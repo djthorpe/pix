@@ -1,6 +1,8 @@
+#include <assert.h>
 #include <vg/vg.h>
 
 vg_path_t vg_path_init(size_t capacity) {
+  assert(capacity > 0 && "vg_path_init requires capacity > 0");
   vg_path_t path;
   path.points = VG_MALLOC(capacity * sizeof(vg_point_t));
   path.size = 0;
@@ -27,31 +29,32 @@ void vg_path_finish(vg_path_t *path) {
   path->capacity = 0;
 }
 
-size_t vg_path_count(const vg_path_t *path) {
-  size_t count = 0;
-  while (path) {
-    count += path->size;
-    path = path->next;
+static vg_path_t *append_point_seg(vg_path_t *seg, int32_t packed) {
+  if (!seg)
+    return NULL;
+  if (seg->size == seg->capacity) {
+    vg_path_t *n = (vg_path_t *)VG_MALLOC(sizeof(vg_path_t));
+    if (!n)
+      return seg;
+    /* Double capacity for each new segment */
+    n->capacity = seg->capacity << 1;
+    n->points = VG_MALLOC(sizeof(vg_point_t) * n->capacity);
+    if (!n->points) {
+      VG_FREE(n);
+      return seg;
+    }
+    n->size = 0;
+    n->next = NULL;
+    seg->next = n;
+    seg = n;
   }
-  return count;
+  seg->points[seg->size++] = packed;
+  return seg;
 }
 
 bool vg_path_append(vg_path_t *path, vg_point_t point) {
-  if (path->size == path->capacity) {
-    vg_path_t *next = VG_MALLOC(sizeof(vg_path_t));
-    if (!next)
-      return false;
-    next->points = VG_MALLOC(path->capacity * sizeof(vg_point_t));
-    if (!next->points) {
-      VG_FREE(next);
-      return false;
-    }
-    next->size = 0;
-    next->capacity = path->capacity;
-    next->next = NULL;
-    path->next = next;
-    return vg_path_append(next, point);
-  }
-  path->points[path->size++] = point;
+  if (!path)
+    return false;
+  append_point_seg(path, point);
   return true;
 }

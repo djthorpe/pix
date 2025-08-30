@@ -6,7 +6,7 @@ A tiny software vector-graphics renderer in C with an SDL2 demo. It renders fill
 
 - Paths and shapes (rect, circle, ellipse, rounded‑rect, triangle)
 - Transforms (2D affine: translate, scale, rotate, multiply)
-- Fill rules: even‑odd and non‑zero
+- Fill rule: even‑odd (non‑zero implementation path present, enum pending)
 - Scanline fill with X‑axis anti‑aliasing (coverage)
 - Strokes with width, caps (butt/square/round), joins (bevel/round)
 - Hairline stroke AA (Xiaolin Wu)
@@ -66,17 +66,34 @@ HTML will be emitted under `./docs/html/` in the build directory. If CMake repor
 
 ## Using the APIs
 
-- Pixels: `pix/frame.h` defines `pix_frame_t` with lock/unlock, set_pixel, draw_line, and clear. Formats supported: `RGB888`, `RGBA8888`, and `GRAY8`.
+- Pixels: `pix/frame.h` defines `pix_frame_t` with lock/unlock, set_pixel, draw_line, and clear. Formats supported: `RGB24`, `RGBA32`, and `GRAY8`.
 - SDL glue: `sdl/sdl_app.h` and `sdl/frame_sdl.h` wrap an SDL window/renderer/streaming texture and expose a `pix_frame_t` you can render into.
 - Vector graphics:
   - Paths: `vg/path.h` (packed i16 points, chainable segments)
   - Shapes: `vg/shape.h` (style, transform pointer)
   - Primitives: `vg/primitives.h` (rect/circle/ellipse/rounded‑rect/triangle)
   - Fill: `vg/fill.h` (`vg_fill_path/shape`, rule selection)
-  - Canvas: `vg/canvas.h` (append shapes and render fill+stroke in order)
+  - Canvas: `vg/canvas.h` (append shapes & render; pooled shape storage to reduce mallocs)
   - Transforms: `vg/transform.h` (build and combine 3×3 affine matrices)
 
-Color is `0xAARRGGBB` (straight alpha). Use `VG_COLOR_NONE` where applicable to disable fill or stroke.
+Color is `0xAARRGGBB` (straight alpha). Use `VG_COLOR_NONE` to disable fill or stroke.
+
+### Shape Pooling
+
+`vg_canvas_t` attempts to allocate a contiguous block of `vg_shape_t` structs.
+`vg_canvas_append` returns pointers into that pool so repeated appends do not
+incur per‑shape heap allocations. Clearing the canvas releases each pooled
+shape's path and resets the pool usage counter; the raw structs are recycled.
+If the pool allocation fails at init the code falls back to per‑shape heap
+allocation transparently.
+
+Guidelines:
+
+- Never call `vg_shape_destroy` on a shape returned by `vg_canvas_append`.
+- After `vg_canvas_clear`, rebuild geometry before reusing previous shape
+  pointers (their path storage was freed).
+- Use `vg_shape_create` only when you need a shape with lifetime independent
+  of a particular canvas.
 
 ## Notes & Tips
 
