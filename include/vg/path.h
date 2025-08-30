@@ -1,18 +1,69 @@
+/**
+ * @file vg/path.h
+ * @brief Lightweight dynamic path container used by vector shapes.
+ *
+ * A vg_path_t is a growable sequence of points broken into a linked list of
+ * fixed-capacity segments. The first node is embedded directly inside the
+ * owning shape for cache locality; additional nodes are heap allocated only
+ * when the point count exceeds the current segment capacity. This keeps small
+ * paths allocation‑free while still allowing arbitrarily large outlines.
+ *
+ * End users normally do not create or destroy paths directly; paths are
+ * managed by vg_shape_t. Use the shape helper functions (see shape.h) to clear
+ * or reserve space. This header exposes a minimal builder utility to append
+ * points when constructing geometry procedurally.
+ */
 #pragma once
+#include <pix/pix.h> /* pix_point_t */
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
-typedef int32_t vg_point_t;
-
+/**
+ * @struct vg_path_t
+ * @brief A segmented dynamic array of points.
+ *
+ * @var vg_path_t::points   Pointer to contiguous point storage for this
+ * segment.
+ * @var vg_path_t::size     Number of points currently stored in this segment.
+ * @var vg_path_t::capacity Maximum number of points this segment can hold
+ * before chaining.
+ * @var vg_path_t::next     Next segment in the chain or NULL if this is the
+ * last.
+ */
 typedef struct vg_path_t {
-  vg_point_t *points;
-  size_t size;
-  size_t capacity;
-  struct vg_path_t *next;
+  pix_point_t *points;    /**< Contiguous points for this segment. */
+  size_t size;            /**< Points used in this segment. */
+  size_t capacity;        /**< Capacity of this segment. */
+  struct vg_path_t *next; /**< Next segment in chain (NULL if end). */
 } vg_path_t;
 
-/* Initialize a path with an initial point capacity (>0 required). */
-vg_path_t vg_path_init(size_t capacity); /* capacity must be > 0 */
-void vg_path_finish(vg_path_t *path);
-bool vg_path_append(vg_path_t *path, vg_point_t point);
+/**
+ * @ingroup vg
+ * @brief Append one or more points to a path (variadic builder API).
+ *
+ * The function accepts a NULL‑terminated list of point pointers. Each pointed
+ * value is copied into the path in order. When the current segment is full a
+ * new segment is allocated with doubled capacity and linked. On allocation
+ * failure the function stops early but returns true for points that were
+ * successfully appended before the failure (best effort, no rollback).
+ *
+ * Typical usage:
+ * @code
+ *   pix_point_t a = {0,0}, b = {10,0}, c = {10,10}, d = {0,10};
+ *   vg_path_append(path, &a, &b, &c, &d, &a, NULL); // closed rectangle
+ * @endcode
+ *
+ * For convenience you may pass addresses of compound literals:
+ * @code
+ *   vg_path_append(path, &(pix_point_t){x,y}, &(pix_point_t){x+5,y}, NULL);
+ * @endcode
+ *
+ * @param path  Target path instance (must be valid).
+ * @param first Pointer to the first point (must not be NULL); pass NULL to do
+ * nothing.
+ * @param ...   Additional point pointers terminated by a NULL sentinel.
+ * @return true if at least one point pointer was processed successfully, false
+ * on invalid args.
+ */
+bool vg_path_append(vg_path_t *path, const pix_point_t *first, ...);

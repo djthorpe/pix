@@ -4,10 +4,10 @@ project(pix C)
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-# Libraries
+# Libraries (including generated icons)
 add_subdirectory(src)
 
 # Examples (SDL based)
 add_subdirectory(examples/sdldemo)
-add_subdirectory(examples/tiger)
+add_subdirectory(examples/sdltiger)
 add_subdirectory(examples/sdlimage)

@@ -1,3 +1,5 @@
+#include "../../src/pix/frame_internal.h"
+#include "../../src/vg/shape_internal.h" /* access to internal create/destroy until refactored */
 #include <math.h>
 #include <pix/pix.h>
 #include <pixsdl/pixsdl.h>
@@ -14,7 +16,7 @@ static void free_text_shapes_from(vg_canvas_t *c, size_t start) {
       const vg_transform_t *xf = vg_shape_get_transform(s);
       if (xf)
         VG_FREE((void *)xf);
-      vg_path_finish(vg_shape_path(s));
+      vg_shape_path_clear(s, 4);
       vg_shape_destroy(s);
     }
   }
@@ -98,61 +100,58 @@ int main(int argc, char *argv[]) {
   // Build stars
   {
     // Bevel star
-    *vg_shape_path(s_bevel) = vg_path_init(11);
+    vg_shape_path_clear(s_bevel, 11);
     for (int i = 0; i < 10; ++i) {
       float ang = (float)i * (float)M_PI / 5.0f - (float)M_PI_2;
       float rad = (i % 2 == 0) ? (float)R : (float)r;
       int px = c1x + (int)lroundf(rad * cosf(ang));
       int py = cy0 + (int)lroundf(rad * sinf(ang));
       vg_path_append(vg_shape_path(s_bevel),
-                     ((int32_t)(px & 0xFFFF) << 16) | (int32_t)(py & 0xFFFF));
+                     &(pix_point_t){(int16_t)px, (int16_t)py}, NULL);
     }
-    vg_point_t first1 =
-        ((int32_t)(((c1x + (int)lroundf((float)R * cosf(-M_PI_2))) & 0xFFFF)
-                   << 16) |
-         (int32_t)(((cy0 + (int)lroundf((float)R * sinf(-M_PI_2))) & 0xFFFF)));
-    vg_path_append(vg_shape_path(s_bevel), first1);
+    pix_point_t first1 = {
+        (int16_t)(c1x + (int)lroundf((float)R * cosf(-M_PI_2))),
+        (int16_t)(cy0 + (int)lroundf((float)R * sinf(-M_PI_2)))};
+    vg_path_append(vg_shape_path(s_bevel), &first1, NULL);
 
     // Round star
-    *vg_shape_path(s_round) = vg_path_init(11);
+    vg_shape_path_clear(s_round, 11);
     for (int i = 0; i < 10; ++i) {
       float ang = (float)i * (float)M_PI / 5.0f - (float)M_PI_2;
       float rad = (i % 2 == 0) ? (float)R : (float)r;
       int px = c2x + (int)lroundf(rad * cosf(ang));
       int py = cy0 + (int)lroundf(rad * sinf(ang));
       vg_path_append(vg_shape_path(s_round),
-                     ((int32_t)(px & 0xFFFF) << 16) | (int32_t)(py & 0xFFFF));
+                     &(pix_point_t){(int16_t)px, (int16_t)py}, NULL);
     }
-    vg_point_t first2 =
-        ((int32_t)(((c2x + (int)lroundf((float)R * cosf(-M_PI_2))) & 0xFFFF)
-                   << 16) |
-         (int32_t)(((cy0 + (int)lroundf((float)R * sinf(-M_PI_2))) & 0xFFFF)));
-    vg_path_append(vg_shape_path(s_round), first2);
+    pix_point_t first2 = {
+        (int16_t)(c2x + (int)lroundf((float)R * cosf(-M_PI_2))),
+        (int16_t)(cy0 + (int)lroundf((float)R * sinf(-M_PI_2)))};
+    vg_path_append(vg_shape_path(s_round), &first2, NULL);
 
     // Miter star
-    *vg_shape_path(s_miter) = vg_path_init(11);
+    vg_shape_path_clear(s_miter, 11);
     for (int i = 0; i < 10; ++i) {
       float ang = (float)i * (float)M_PI / 5.0f - (float)M_PI_2;
       float rad = (i % 2 == 0) ? (float)R : (float)r;
       int px = c3x + (int)lroundf(rad * cosf(ang));
       int py = cy0 + (int)lroundf(rad * sinf(ang));
       vg_path_append(vg_shape_path(s_miter),
-                     ((int32_t)(px & 0xFFFF) << 16) | (int32_t)(py & 0xFFFF));
+                     &(pix_point_t){(int16_t)px, (int16_t)py}, NULL);
     }
-    vg_point_t first3 =
-        ((int32_t)(((c3x + (int)lroundf((float)R * cosf(-M_PI_2))) & 0xFFFF)
-                   << 16) |
-         (int32_t)(((cy0 + (int)lroundf((float)R * sinf(-M_PI_2))) & 0xFFFF)));
-    vg_path_append(vg_shape_path(s_miter), first3);
+    pix_point_t first3 = {
+        (int16_t)(c3x + (int)lroundf((float)R * cosf(-M_PI_2))),
+        (int16_t)(cy0 + (int)lroundf((float)R * sinf(-M_PI_2)))};
+    vg_path_append(vg_shape_path(s_miter), &first3, NULL);
   }
-  vg_shape_set_fill_color(s_bevel, VG_COLOR_NONE);
+  vg_shape_set_fill_color(s_bevel, PIX_COLOR_NONE);
   vg_shape_set_stroke_color(s_bevel, 0xFF66FF66);
   vg_shape_set_stroke_width(s_bevel, 30.0f);
   vg_shape_set_stroke_cap(s_bevel, VG_CAP_BUTT);
   vg_shape_set_stroke_join(s_bevel, VG_JOIN_BEVEL);
   vg_shape_set_miter_limit(s_bevel, 4.0f);
   vg_shape_set_transform(s_bevel, NULL);
-  vg_shape_set_fill_color(s_round, VG_COLOR_NONE);
+  vg_shape_set_fill_color(s_round, PIX_COLOR_NONE);
   vg_shape_set_stroke_color(s_round, 0xFF66AAFF);
   vg_shape_set_stroke_width(s_round, 30.0f);
   vg_shape_set_stroke_cap(s_round, VG_CAP_BUTT);
@@ -160,7 +159,7 @@ int main(int argc, char *argv[]) {
   vg_shape_set_miter_limit(s_round, 4.0f);
   vg_shape_set_transform(s_round, NULL);
   // Miter star (with high limit)
-  vg_shape_set_fill_color(s_miter, VG_COLOR_NONE);
+  vg_shape_set_fill_color(s_miter, PIX_COLOR_NONE);
   vg_shape_set_stroke_color(s_miter, 0xFFFF6666);
   vg_shape_set_stroke_width(s_miter, 30.0f);
   vg_shape_set_stroke_cap(s_miter, VG_CAP_BUTT);
@@ -181,7 +180,7 @@ int main(int argc, char *argv[]) {
     text_shape = vg_font_get_text_shape_cached(
         &vg_font_tiny5x7, demo_text, 0xFFFFFFFFu, text_px, 1.0f, &txt_w);
   if (text_shape) {
-    text_shape_center = vg_shape_create();
+    text_shape_center = vg_shape_create(); /* internal */
     if (text_shape_center) {
       *vg_shape_path(text_shape_center) =
           *vg_shape_path(text_shape); // shallow path copy
@@ -205,8 +204,8 @@ int main(int argc, char *argv[]) {
               text_shape_center; // adopt external shape
         }
       } else {
-        vg_path_finish(vg_shape_path(text_shape_center));
-        vg_shape_destroy(text_shape_center);
+        vg_shape_path_clear(text_shape_center, 4);
+        vg_shape_destroy(text_shape_center); /* internal */
         text_shape_center = NULL;
       }
     }
@@ -246,7 +245,7 @@ int main(int argc, char *argv[]) {
       vg_transform_translate(&t_center, (float)cx, (float)cy);
       vg_transform_translate(&t_neg_center, (float)-cx, (float)-cy);
       // Rebuild square at new size
-      vg_path_finish(vg_shape_path(shape));
+      vg_shape_path_clear(shape, 5);
       vg_shape_init_rect(shape,
                          (pix_point_t){(int16_t)(cx - h), (int16_t)(cy - h)},
                          (pix_size_t){(uint16_t)side, (uint16_t)side});
@@ -257,7 +256,7 @@ int main(int argc, char *argv[]) {
       vg_shape_set_stroke_join(shape, VG_JOIN_ROUND);
       vg_shape_set_transform(shape, &transform); // rebind transform
                                                  // Rebuild circle at new size
-      vg_path_finish(vg_shape_path(circle));
+      vg_shape_path_clear(circle, 65);
       vg_shape_init_circle(circle, (pix_point_t){(int16_t)cx, (int16_t)cy},
                            (pix_scalar_t)cr, 64);
       vg_shape_set_fill_color(circle, 0x80FF0000);
@@ -267,7 +266,7 @@ int main(int argc, char *argv[]) {
       vg_shape_set_stroke_join(circle, VG_JOIN_ROUND);
       vg_shape_set_transform(circle, &circle_xform);
       // Rebuild triangle at new size
-      vg_path_finish(vg_shape_path(tri));
+      vg_shape_path_clear(tri, 4);
       tx0 = cx;
       ty0 = cy - h;
       tx1 = cx - h;
@@ -296,75 +295,81 @@ int main(int argc, char *argv[]) {
       c3x = c2x + (2 * R + gap);
       cy0 = margin_top + R;
       // Rebuild each star
-      vg_path_finish(vg_shape_path(s_bevel));
-      *vg_shape_path(s_bevel) = vg_path_init(11);
+      vg_shape_path_clear(s_bevel, 11);
       for (int i = 0; i < 10; ++i) {
         float ang = (float)i * (float)M_PI / 5.0f - (float)M_PI_2;
         float rad = (i % 2 == 0) ? (float)R : (float)r;
         int px = c1x + (int)lroundf(rad * cosf(ang));
         int py = cy0 + (int)lroundf(rad * sinf(ang));
         vg_path_append(vg_shape_path(s_bevel),
-                       ((int32_t)(px & 0xFFFF) << 16) | (int32_t)(py & 0xFFFF));
+                       &(pix_point_t){(int16_t)px, (int16_t)py}, NULL);
       }
       {
-        vg_point_t first =
+        int32_t first =
             ((int32_t)(((c1x + (int)lroundf((float)R * cosf(-M_PI_2))) & 0xFFFF)
                        << 16) |
              (int32_t)(((cy0 + (int)lroundf((float)R * sinf(-M_PI_2))) &
                         0xFFFF)));
-        vg_path_append(vg_shape_path(s_bevel), first);
+        vg_path_append(vg_shape_path(s_bevel),
+                       &(pix_point_t){(int16_t)((first >> 16) & 0xFFFF),
+                                      (int16_t)(first & 0xFFFF)},
+                       NULL);
       }
-      vg_shape_set_fill_color(s_bevel, VG_COLOR_NONE);
+      vg_shape_set_fill_color(s_bevel, PIX_COLOR_NONE);
       vg_shape_set_stroke_color(s_bevel, 0xFF66FF66);
       vg_shape_set_stroke_width(s_bevel, 30.0f);
       vg_shape_set_stroke_cap(s_bevel, VG_CAP_BUTT);
       vg_shape_set_stroke_join(s_bevel, VG_JOIN_BEVEL);
       vg_shape_set_miter_limit(s_bevel, 4.0f);
       vg_shape_set_transform(s_bevel, NULL);
-      vg_path_finish(vg_shape_path(s_round));
-      *vg_shape_path(s_round) = vg_path_init(11);
+      vg_shape_path_clear(s_round, 11);
       for (int i = 0; i < 10; ++i) {
         float ang = (float)i * (float)M_PI / 5.0f - (float)M_PI_2;
         float rad = (i % 2 == 0) ? (float)R : (float)r;
         int px = c2x + (int)lroundf(rad * cosf(ang));
         int py = cy0 + (int)lroundf(rad * sinf(ang));
         vg_path_append(vg_shape_path(s_round),
-                       ((int32_t)(px & 0xFFFF) << 16) | (int32_t)(py & 0xFFFF));
+                       &(pix_point_t){(int16_t)px, (int16_t)py}, NULL);
       }
       {
-        vg_point_t first =
+        int32_t first =
             ((int32_t)(((c2x + (int)lroundf((float)R * cosf(-M_PI_2))) & 0xFFFF)
                        << 16) |
              (int32_t)(((cy0 + (int)lroundf((float)R * sinf(-M_PI_2))) &
                         0xFFFF)));
-        vg_path_append(vg_shape_path(s_round), first);
+        vg_path_append(vg_shape_path(s_round),
+                       &(pix_point_t){(int16_t)((first >> 16) & 0xFFFF),
+                                      (int16_t)(first & 0xFFFF)},
+                       NULL);
       }
-      vg_shape_set_fill_color(s_round, VG_COLOR_NONE);
+      vg_shape_set_fill_color(s_round, PIX_COLOR_NONE);
       vg_shape_set_stroke_color(s_round, 0xFF66AAFF);
       vg_shape_set_stroke_width(s_round, 30.0f);
       vg_shape_set_stroke_cap(s_round, VG_CAP_BUTT);
       vg_shape_set_stroke_join(s_round, VG_JOIN_ROUND);
       vg_shape_set_miter_limit(s_round, 4.0f);
       vg_shape_set_transform(s_round, NULL);
-      vg_path_finish(vg_shape_path(s_miter));
-      *vg_shape_path(s_miter) = vg_path_init(11);
+      vg_shape_path_clear(s_miter, 11);
       for (int i = 0; i < 10; ++i) {
         float ang = (float)i * (float)M_PI / 5.0f - (float)M_PI_2;
         float rad = (i % 2 == 0) ? (float)R : (float)r;
         int px = c3x + (int)lroundf(rad * cosf(ang));
         int py = cy0 + (int)lroundf(rad * sinf(ang));
         vg_path_append(vg_shape_path(s_miter),
-                       ((int32_t)(px & 0xFFFF) << 16) | (int32_t)(py & 0xFFFF));
+                       &(pix_point_t){(int16_t)px, (int16_t)py}, NULL);
       }
       {
-        vg_point_t first =
+        int32_t first =
             ((int32_t)(((c3x + (int)lroundf((float)R * cosf(-M_PI_2))) & 0xFFFF)
                        << 16) |
              (int32_t)(((cy0 + (int)lroundf((float)R * sinf(-M_PI_2))) &
                         0xFFFF)));
-        vg_path_append(vg_shape_path(s_miter), first);
+        vg_path_append(vg_shape_path(s_miter),
+                       &(pix_point_t){(int16_t)((first >> 16) & 0xFFFF),
+                                      (int16_t)(first & 0xFFFF)},
+                       NULL);
       }
-      vg_shape_set_fill_color(s_miter, VG_COLOR_NONE);
+      vg_shape_set_fill_color(s_miter, PIX_COLOR_NONE);
       vg_shape_set_stroke_color(s_miter, 0xFFFF6666);
       vg_shape_set_stroke_width(s_miter, 30.0f);
       vg_shape_set_stroke_cap(s_miter, VG_CAP_BUTT);
@@ -427,11 +432,7 @@ int main(int argc, char *argv[]) {
   }
 
   // Cleanup
-  vg_path_finish(vg_shape_path(shape));
-  vg_path_finish(vg_shape_path(circle));
-  vg_path_finish(vg_shape_path(s_bevel));
-  vg_path_finish(vg_shape_path(s_round));
-  vg_path_finish(vg_shape_path(s_miter));
+  /* Paths cleaned up by shape destruction */
   // Free text glyph shapes
   free_text_shapes_from(&canvas, base_shapes);
   sdl_app_destroy(app);

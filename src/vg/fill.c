@@ -3,6 +3,7 @@
 #include <math.h>
 #include <stdlib.h>
 
+#include "fill_internal.h"
 #include <pix/pix.h>
 #include <vg/vg.h>
 
@@ -27,7 +28,7 @@ static void vg__fill_path_simple(const vg_path_t *path,
                                  int clip_y1) {
   if (!path)
     return;
-  (void)rule; // rule used later; silence potential unused warnings in trims
+  // rule parameter used below for even-odd vs non-zero logic
   // 1. Count segments
   int est = 0;
   const vg_path_t *seg = path;
@@ -56,10 +57,10 @@ static void vg__fill_path_simple(const vg_path_t *path,
       continue;
     }
     for (size_t i = 1; i < seg->size; i++) {
-      int32_t a = seg->points[i - 1];
-      int32_t b = seg->points[i];
-      float x0 = (int16_t)(a >> 16), y0 = (int16_t)(a & 0xFFFF);
-      float x1 = (int16_t)(b >> 16), y1 = (int16_t)(b & 0xFFFF);
+      pix_point_t a = seg->points[i - 1];
+      pix_point_t b = seg->points[i];
+      float x0 = a.x, y0 = a.y;
+      float x1 = b.x, y1 = b.y;
       if (xf) {
         float tx0 = xf->m[0][0] * x0 + xf->m[0][1] * y0 + xf->m[0][2];
         float ty0 = xf->m[1][0] * x0 + xf->m[1][1] * y0 + xf->m[1][2];
@@ -104,7 +105,6 @@ static void vg__fill_path_simple(const vg_path_t *path,
       tmp[ec].y_start = y_start;
       tmp[ec].y_end = y_end;
       tmp[ec].winding = winding;
-      // (debug removed)
       ec++;
     }
     seg = seg->next;
@@ -153,8 +153,8 @@ static void vg__fill_path_simple(const vg_path_t *path,
   int *row_max = NULL;
   { // allocate span bounds for bridging
     size_t rows = (size_t)(global_y1 - global_y0 + 1);
-    row_min = (int *)malloc(rows * sizeof(int));
-    row_max = (int *)malloc(rows * sizeof(int));
+    row_min = (int *)VG_MALLOC(rows * sizeof(int));
+    row_max = (int *)VG_MALLOC(rows * sizeof(int));
     if (row_min && row_max) {
       for (int i = 0; i <= global_y1 - global_y0; ++i) {
         row_min[i] = 0x7FFFFFFF;
@@ -203,7 +203,6 @@ static void vg__fill_path_simple(const vg_path_t *path,
     }
     active = sorted;
     int span_count_this_row = 0;
-    // (debug removed)
     // Build spans
     if (rule == VG_FILL_EVEN_ODD) {
       int inside = 0;
@@ -234,7 +233,6 @@ static void vg__fill_path_simple(const vg_path_t *path,
                   row_min[y - global_y0] = sx;
                 if (row_max && ex > row_max[y - global_y0])
                   row_max[y - global_y0] = ex;
-                // (debug removed)
               }
             }
           }
@@ -272,7 +270,6 @@ static void vg__fill_path_simple(const vg_path_t *path,
                   row_min[y - global_y0] = sx;
                 if (row_max && ex > row_max[y - global_y0])
                   row_max[y - global_y0] = ex;
-                // (debug removed)
               }
             }
           }
@@ -282,7 +279,6 @@ static void vg__fill_path_simple(const vg_path_t *path,
         winding = new_w;
       }
     }
-    // (debug counters removed)
     // advance
     for (SimpleEdge *se = active; se; se = se->next)
       se->x += se->dx_dy;
@@ -378,9 +374,9 @@ static void vg__fill_path_simple(const vg_path_t *path,
   VG_FREE(buckets);
   VG_FREE(tmp);
   if (row_min)
-    free(row_min);
+    VG_FREE(row_min);
   if (row_max)
-    free(row_max);
+    VG_FREE(row_max);
 }
 
 void vg_fill_path_clipped(const vg_path_t *path, const vg_transform_t *xf,

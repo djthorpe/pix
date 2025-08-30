@@ -1,5 +1,6 @@
 /**
  * @file include/pix/frame.h
+ * @ingroup pix
  * @brief Pixel frame abstraction used by the software renderer and backends.
  *
  * This header defines a minimal, backend-agnostic pixel frame interface
@@ -21,6 +22,9 @@ extern "C" {
 #endif
 
 typedef struct pix_frame_t pix_frame_t;
+
+/* Blit/copy flags */
+typedef enum { PIX_BLIT_NONE = 0u, PIX_BLIT_ALPHA = 1u << 0 } pix_blit_flags_t;
 
 /**
  * @brief A 2D pixel buffer and drawing interface.
@@ -71,6 +75,14 @@ struct pix_frame_t {
   void (*set_pixel)(pix_frame_t *frame, pix_point_t pt, pix_color_t color);
 
   /**
+   * @brief Read a pixel (no bounds expansion). Returns 0 on OOB.
+   * @param frame Frame to read from (must be locked if backend requires).
+   * @param pt Coordinate to sample.
+   * @return 0xAARRGGBB (alpha 0xFF if format has no alpha channel).
+   */
+  pix_color_t (*get_pixel)(const struct pix_frame_t *frame, pix_point_t pt);
+
+  /**
    * @brief Draw a line segment (backend may implement hardware acceleration).
    * @param frame Frame to draw into (must be locked).
    * @param x0,y0 Start point.
@@ -79,52 +91,14 @@ struct pix_frame_t {
    */
   void (*draw_line)(pix_frame_t *frame, pix_point_t a, pix_point_t b,
                     pix_color_t color);
+
+  /**
+   * @brief Copy a rectangle of pixels from another frame (blit).
+   */
+  bool (*copy)(struct pix_frame_t *dst, pix_point_t dst_origin,
+               const struct pix_frame_t *src, pix_point_t src_origin,
+               pix_size_t size, pix_blit_flags_t flags);
 };
-
-/**
- * @name Default implementations
- * @brief Software fallbacks usable by backends.
- * @{ */
-
-/** Set a pixel with straight-alpha src-over blending (0xAARRGGBB). */
-void pix_frame_set_pixel(pix_frame_t *frame, pix_point_t pt, pix_color_t color);
-
-/** Draw a line using integer Bresenham (no anti-aliasing). */
-void pix_frame_draw_line(pix_frame_t *frame, pix_point_t a, pix_point_t b,
-                         pix_color_t color);
-
-/** Fill the entire frame with a solid value.
- * For byte-addressable formats, value should be a packed pixel in the
- * frame's format; for GRAY8 it is a single byte replicated across the buffer.
- */
-void pix_frame_clear(pix_frame_t *frame, pix_color_t value);
-
-/** @} */
-
-/**
- * @name Frame copy (blit) utility
- * @brief Copy a rectangle of pixels from one frame to another.
- *
- * Performs format conversion if needed; if PIX_BLIT_ALPHA is set and the
- * source has an alpha channel (RGBA32) a src-over blend is applied into the
- * destination. Otherwise replaces destination pixels. The function clips the
- * requested region to the bounds of both frames. Returns false only on invalid
- * parameters (NULL frames). size.w==0 or size.h==0 -> success no-op.
- *
- * Locking: Caller must ensure frames are locked (if required by backend).
- * This routine does not call lock/unlock.
- */
-/** Blit/copy flags */
-typedef enum {
-  PIX_BLIT_NONE = 0u,      /**< Default copy (convert formats if needed). */
-  PIX_BLIT_ALPHA = 1u << 0 /**< Src-over blend if source has alpha channel. */
-} pix_blit_flags_t;
-
-bool pix_frame_copy(struct pix_frame_t *dst, pix_point_t dst_origin,
-                    const struct pix_frame_t *src, pix_point_t src_origin,
-                    pix_size_t size, pix_blit_flags_t flags);
-
-/** @} */
 
 #ifdef __cplusplus
 }

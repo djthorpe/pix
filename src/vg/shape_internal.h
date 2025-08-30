@@ -34,3 +34,7 @@ struct vg_shape_t {
 
 /* Internal helper used by the canvas pool to lazily initialize defaults. */
 void vg__shape_internal_defaults(vg_shape_t *s);
+
+/* Internal lifecycle (no longer exposed publicly) */
+vg_shape_t *vg_shape_create(void);
+void vg_shape_destroy(vg_shape_t *shape);

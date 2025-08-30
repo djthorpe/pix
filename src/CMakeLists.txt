@@ -4,7 +4,7 @@ add_library(pix STATIC
     pix/rgba32.c
     pix/grey8.c
     pix/rgb565.c
-    pix/image_jpeg.c
+    pix/jpeg.c
     vg/canvas.c
     vg/shape.c
     vg/path.c
@@ -15,7 +15,7 @@ add_library(pix STATIC
     ../third_party/tjpgd3/src/tjpgd.c
 )
 target_include_directories(pix PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/../include        # <pix/pix.h> <vg/vg.h> 
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include  
     ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tjpgd3/src
 )
 
@@ -27,6 +27,9 @@ add_library(pixsdl STATIC
 )
 target_link_libraries(pixsdl PUBLIC pix ${SDL2_LIBRARIES} m)
 target_include_directories(pixsdl PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/../include        # <pixsdl/pixsdl.h>
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include   
     ${SDL2_INCLUDE_DIRS}
 )
+
+# Add icons
+add_subdirectory(icons)

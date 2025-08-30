@@ -69,8 +69,8 @@ static void build_tiger_shapes(void) {
       break; // capacity or alloc failure
     // Defaults
     vg_shape_set_transform(s, &g_tiger_xform);
-    vg_shape_set_fill_color(s, VG_COLOR_NONE);
-    vg_shape_set_stroke_color(s, VG_COLOR_NONE);
+    vg_shape_set_fill_color(s, PIX_COLOR_NONE);
+    vg_shape_set_stroke_color(s, PIX_COLOR_NONE);
     vg_shape_set_stroke_width(s, 1.0f);
     vg_shape_set_stroke_cap(s, VG_CAP_BUTT);
     vg_shape_set_stroke_join(s, VG_JOIN_BEVEL);
@@ -132,20 +132,19 @@ static void build_tiger_shapes(void) {
     }
     // Elements
     int elements = (int)pts[p++];
-    vg_path_t path = vg_path_init(128);
+    vg_shape_path_clear(s, 128);
     f2 cur = {0, 0};
     f2 start = {0, 0};
-    vg_path_t *seg = &path;
+    vg_path_t *seg = vg_shape_path(s);
 #define EMIT_POINT(X, Y)                                                       \
   do {                                                                         \
     int16_t ix = (int16_t)lroundf((X));                                        \
     int16_t iy = (int16_t)lroundf((Y));                                        \
-    int32_t packed = ((int32_t)(uint16_t)ix << 16) | (uint16_t)iy;             \
     if (seg->size == seg->capacity) {                                          \
       vg_path_t *n = (vg_path_t *)VG_MALLOC(sizeof(vg_path_t));                \
       if (n) {                                                                 \
         n->capacity = seg->capacity;                                           \
-        n->points = VG_MALLOC(sizeof(vg_point_t) * n->capacity);               \
+        n->points = VG_MALLOC(sizeof(pix_point_t) * n->capacity);              \
         if (!n->points) {                                                      \
           VG_FREE(n);                                                          \
         } else {                                                               \
@@ -156,7 +155,9 @@ static void build_tiger_shapes(void) {
         }                                                                      \
       }                                                                        \
     }                                                                          \
-    seg->points[seg->size++] = packed;                                         \
+    if (seg->size < seg->capacity) {                                           \
+      seg->points[seg->size++] = (pix_point_t){ix, iy};                        \
+    }                                                                          \
   } while (0)
     struct CubicItem {
       f2 a, b, c, d;
@@ -171,8 +172,8 @@ static void build_tiger_shapes(void) {
         if (seg->size > 0) {
           vg_path_t *n = (vg_path_t *)VG_MALLOC(sizeof(vg_path_t));
           if (n) {
-            n->capacity = path.capacity; // reuse initial capacity
-            n->points = VG_MALLOC(sizeof(vg_point_t) * n->capacity);
+            n->capacity = seg->capacity; // reuse current segment capacity
+            n->points = VG_MALLOC(sizeof(pix_point_t) * n->capacity);
             if (!n->points) {
               VG_FREE(n);
             } else {
@@ -255,9 +256,8 @@ static void build_tiger_shapes(void) {
         cur = d;
       } else if (op == 'E') {
         int16_t sx = (int16_t)lroundf(start.x), sy = (int16_t)lroundf(start.y);
-        int16_t lx = (int16_t)((seg->points[seg->size - 1] >> 16) & 0xFFFF);
-        int16_t ly = (int16_t)(seg->points[seg->size - 1] & 0xFFFF);
-        if (sx != lx || sy != ly)
+        pix_point_t last = seg->points[seg->size - 1];
+        if (sx != last.x || sy != last.y)
           EMIT_POINT(start.x, start.y);
         cur = start;
       }
@@ -265,7 +265,7 @@ static void build_tiger_shapes(void) {
     if (fill) {
       // per-subpath closure handled by 'E' commands
     }
-    *vg_shape_path(s) = path;
+    // path already written into shape
 #undef EMIT_POINT
     si++; // already appended
     (void)fill_rule;
@@ -296,8 +296,7 @@ static void build_tiger_shapes(void) {
       int16_t max_py = 0;
       for (vg_path_t *s2 = vg_shape_path(text_shape); s2; s2 = s2->next) {
         for (size_t pi = 0; pi < s2->size; ++pi) {
-          int32_t packed = s2->points[pi];
-          int16_t py = (int16_t)(packed & 0xFFFF);
+          int16_t py = s2->points[pi].y;
           if (py > max_py)
             max_py = py;
         }
@@ -308,45 +307,38 @@ static void build_tiger_shapes(void) {
       // (exclusive) separately: top y0 -> (max_py - (y_bot)), bottom y_bot ->
       // (max_py - (y_top)). This keeps rectangles bottom‑exclusive after flip
       // so no rows are lost (fixes clipped descenders / 's').
-      vg_path_t *seg = vg_shape_path(text_shape);
-      while (seg) {
-        if (seg->size == 5) { // expected rectangle path: pt0..pt4 (pt4==pt0)
-          int32_t p0 = seg->points[0];
-          int32_t p2 = seg->points[2];
-          int16_t y_top = (int16_t)(p0 & 0xFFFF);
-          // point 2 holds bottom-exclusive y
-          int16_t y_bot = (int16_t)(p2 & 0xFFFF);
+      vg_path_t *seg_font = vg_shape_path(text_shape);
+      while (seg_font) {
+        if (seg_font->size ==
+            5) { // expected rectangle path: pt0..pt4 (pt4==pt0)
+          pix_point_t p0 = seg_font->points[0];
+          pix_point_t p2 = seg_font->points[2];
+          int16_t y_top = p0.y;
+          int16_t y_bot = p2.y; // bottom-exclusive
           int16_t new_y_top = (int16_t)(max_py - y_bot);
           int16_t new_y_bot = (int16_t)(max_py - y_top);
-          // Rewrite points with flipped y preserving x
-          for (size_t pi = 0; pi < seg->size; ++pi) {
-            int32_t packed = seg->points[pi];
-            int16_t px = (int16_t)((packed >> 16) & 0xFFFF);
-            int16_t py = (int16_t)(packed & 0xFFFF);
-            int16_t ny =
-                py == y_top ? new_y_top : (py == y_bot ? new_y_bot : py);
-            float fx = (float)px + ox;
+          for (size_t pi = 0; pi < seg_font->size; ++pi) {
+            pix_point_t pt = seg_font->points[pi];
+            int16_t ny = (pt.y == y_top) ? new_y_top
+                                         : (pt.y == y_bot ? new_y_bot : pt.y);
+            float fx = (float)pt.x + ox;
             float fy = (float)ny + oy;
             int16_t nx = (int16_t)lroundf(fx);
             int16_t nfy = (int16_t)lroundf(fy);
-            seg->points[pi] = ((int32_t)(uint16_t)nx << 16) | (uint16_t)nfy;
+            seg_font->points[pi] = (pix_point_t){nx, nfy};
           }
         } else {
-          // Fallback (unexpected path size): simple per-point mirror using
-          // exclusive height; this shouldn't occur for tiny5x7 rectangles.
-          for (size_t pi = 0; pi < seg->size; ++pi) {
-            int32_t packed = seg->points[pi];
-            int16_t px = (int16_t)((packed >> 16) & 0xFFFF);
-            int16_t py = (int16_t)(packed & 0xFFFF);
-            int16_t ny = (int16_t)(max_py - py);
-            float fx = (float)px + ox;
+          for (size_t pi = 0; pi < seg_font->size; ++pi) {
+            pix_point_t pt = seg_font->points[pi];
+            int16_t ny = (int16_t)(max_py - pt.y);
+            float fx = (float)pt.x + ox;
             float fy = (float)ny + oy;
             int16_t nx = (int16_t)lroundf(fx);
             int16_t nfy = (int16_t)lroundf(fy);
-            seg->points[pi] = ((int32_t)(uint16_t)nx << 16) | (uint16_t)nfy;
+            seg_font->points[pi] = (pix_point_t){nx, nfy};
           }
         }
-        seg = seg->next;
+        seg_font = seg_font->next;
       }
       // Free the font scaling transform (we baked it) and reference global xf
       if (font_xf) {

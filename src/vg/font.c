@@ -1,3 +1,5 @@
+#include "path_internal.h"
+#include "shape_internal.h" /* internal shape lifecycle */
 #include <pix/frame.h>
 #include <stdlib.h>
 #include <string.h>
@@ -39,8 +41,8 @@ static const uint8_t bitmap_descender_row[95] = {
     0, 0, 0x80, 0x08, 0, 0, 0, // m n o p q r s
     // 0x74..0x7A (indices 84..90) descender: y(col4=0x08)
     0, 0, 0, 0, 0, 0x08, 0, // t u v w x y z
-    // 0x7B..0x7F
-    0, 0, 0, 0, 0};
+    // 0x7B..0x7E
+    0, 0, 0, 0};
 
 static const uint8_t bitmap_5x7[95][7] = {
     // 0x20 ' '
@@ -288,9 +290,6 @@ static bool run_buf_push(run_buf_t *rb, int x, int y, int w) {
   return true;
 }
 
-static inline int32_t pack_i16(int x, int y) {
-  return ((int32_t)(x & 0xFFFF) << 16) | (int32_t)(y & 0xFFFF);
-}
 static vg_path_t make_outline_from_runs(const run_buf_t *rb, int ascent) {
   // We'll build the first rectangle in 'head'; subsequent rectangles become
   // chained vg_path_t nodes via the 'next' pointer to keep them disjoint.
@@ -333,11 +332,11 @@ static vg_path_t make_outline_from_runs(const run_buf_t *rb, int ascent) {
     }
     first_rect = false;
     // y coordinates are row indices (top=0). Baseline occurs at font->ascent.
-    vg_path_append(seg, pack_i16(x0, y_top));
-    vg_path_append(seg, pack_i16(x1, y_top));
-    vg_path_append(seg, pack_i16(x1, y_bot));
-    vg_path_append(seg, pack_i16(x0, y_bot));
-    vg_path_append(seg, pack_i16(x0, y_top));
+    vg_path_append(seg, &(pix_point_t){(int16_t)x0, (int16_t)y_top},
+                   &(pix_point_t){(int16_t)x1, (int16_t)y_top},
+                   &(pix_point_t){(int16_t)x1, (int16_t)y_bot},
+                   &(pix_point_t){(int16_t)x0, (int16_t)y_bot},
+                   &(pix_point_t){(int16_t)x0, (int16_t)y_top}, NULL);
   }
   VG_FREE(used);
   return head;

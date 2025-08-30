@@ -1,8 +1,10 @@
+#include "frame_internal.h"
 #include <pix/image.h>
 #include <pix/pix.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <vg/vg.h> /* for VG_MALLOC/VG_FREE */
 
 #include "tjpgd.h"
 
@@ -20,6 +22,7 @@ static bool jpeg_frame_lock(pix_frame_t *f) {
   (void)f;
   return true;
 }
+
 static void jpeg_frame_unlock(pix_frame_t *f) { (void)f; }
 
 // Tiny helper frame creation for RGB24 software frame (no backend, always
@@ -28,7 +31,7 @@ static void simple_frame_finalize(pix_frame_t *frame) {
   if (!frame)
     return;
   if (frame->pixels) {
-    free(frame->pixels);
+    VG_FREE(frame->pixels);
     frame->pixels = NULL;
   }
   frame->stride = 0;
@@ -52,12 +55,12 @@ static pix_frame_t *alloc_frame(uint16_t w, uint16_t h, pix_format_t fmt) {
   }
   size_t stride = (size_t)w * bpp;
   size_t bytes = stride * h;
-  uint8_t *pixels = (uint8_t *)malloc(bytes);
+  uint8_t *pixels = (uint8_t *)VG_MALLOC(bytes);
   if (!pixels)
     return NULL;
-  pix_frame_t *f = (pix_frame_t *)malloc(sizeof(pix_frame_t));
+  pix_frame_t *f = (pix_frame_t *)VG_MALLOC(sizeof(pix_frame_t));
   if (!f) {
-    free(pixels);
+    VG_FREE(pixels);
     return NULL;
   }
   memset(f, 0, sizeof(*f));
@@ -66,6 +69,8 @@ static pix_frame_t *alloc_frame(uint16_t w, uint16_t h, pix_format_t fmt) {
   f->stride = stride;
   f->format = fmt;
   f->set_pixel = pix_frame_set_pixel; // generic dispatch uses format
+  f->get_pixel = pix_frame_get_pixel; // new function pointer
+  f->copy = pix_frame_copy;           // copy/blit entry
   f->draw_line = pix_frame_draw_line;
   // lock/unlock no-op (already CPU accessible)
   f->lock = jpeg_frame_lock;
@@ -74,7 +79,7 @@ static pix_frame_t *alloc_frame(uint16_t w, uint16_t h, pix_format_t fmt) {
   return f;
 }
 
-/* Caller frees returned frame: free(frame->pixels); free(frame); */
+/* Caller frees returned frame: VG_FREE(frame->pixels); VG_FREE(frame); */
 
 typedef struct {
   jpeg_stream_t stream;
@@ -187,14 +192,14 @@ static pix_frame_t *pix_frame_init_jpeg_common(jpeg_stream_t *stream,
   ctx.stream = *stream;
   ctx.format = format;
   size_t pool_size = 32 * 1024; /* work buffer */
-  void *pool = malloc(pool_size);
+  void *pool = VG_MALLOC(pool_size);
   if (!pool)
     return NULL;
   JDEC jd;
   JRESULT jr = jd_prepare(&jd, jpeg_infunc, pool, pool_size, &ctx);
   if (jr != JDR_OK) {
     fprintf(stderr, "jd_prepare failed (%d)\n", jr);
-    free(pool);
+    VG_FREE(pool);
     return NULL;
   }
   ctx.width = jd.width;
@@ -202,18 +207,18 @@ static pix_frame_t *pix_frame_init_jpeg_common(jpeg_stream_t *stream,
   ctx.frame = alloc_frame(jd.width, jd.height, format);
   if (!ctx.frame) {
     fprintf(stderr, "alloc_frame failed (%ux%u)\n", jd.width, jd.height);
-    free(pool);
+    VG_FREE(pool);
     return NULL;
   }
   jr = jd_decomp(&jd, jpeg_outfunc, 0); /* scale=0 full size */
   if (jr != JDR_OK) {
     fprintf(stderr, "jd_decomp failed (%d)\n", jr);
     ctx.frame->finalize(ctx.frame);
-    free(ctx.frame);
-    free(pool);
+    VG_FREE(ctx.frame);
+    VG_FREE(pool);
     return NULL;
   }
-  free(pool);
+  VG_FREE(pool);
   return ctx.frame;
 }
 

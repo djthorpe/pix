@@ -1,3 +1,4 @@
+#include "frame_internal.h"
 #include "pix.h"
 #include <math.h>
 #include <string.h>
@@ -69,6 +70,25 @@ void pix_frame_clear(pix_frame_t *frame, pix_color_t value) {
   default:
     // no-op
     break;
+  }
+}
+
+pix_color_t pix_frame_get_pixel(const pix_frame_t *frame, pix_point_t pt) {
+  if (!frame || !frame->pixels)
+    return 0;
+  if ((uint16_t)pt.x >= frame->size.w || (uint16_t)pt.y >= frame->size.h)
+    return 0;
+  switch (frame->format) {
+  case PIX_FMT_RGB24:
+    return pix_frame_get_pixel_rgb24(frame, pt);
+  case PIX_FMT_RGBA32:
+    return pix_frame_get_pixel_rgba32(frame, pt);
+  case PIX_FMT_GRAY8:
+    return pix_frame_get_pixel_gray8(frame, pt);
+  case PIX_FMT_RGB565:
+    return pix_frame_get_pixel_rgb565(frame, pt);
+  default:
+    return 0;
   }
 }
 
@@ -191,152 +211,24 @@ bool pix_frame_copy(pix_frame_t *dst, pix_point_t dst_origin,
     }
   }
 
-  /* Helper lambdas (static inline functions not available inside function, use
-   * macros) */
-  for (int row = 0; row < h; ++row) {
-    int sr = sy + row;
-    int dr = dy + row;
-    /* Row pointers */
-    uint8_t *drow = (uint8_t *)dst->pixels + (size_t)dr * dst->stride;
-    const uint8_t *srow =
-        (const uint8_t *)src->pixels + (size_t)sr * src->stride;
-    for (int col = 0; col < w; ++col) {
-      int sc = sx + col;
-      int dc = dx + col;
-      switch (src->format) {
-      case PIX_FMT_RGBA32: {
-        const uint8_t *sp = srow + sc * 4;
-        uint8_t sr_ = sp[0], sg_ = sp[1], sb_ = sp[2], sa_ = sp[3];
-        if (!want_alpha)
-          sa_ = 255; /* treat as opaque replace */
-        if (dst->format == PIX_FMT_RGBA32) {
-          uint8_t *dp = drow + dc * 4;
-          if (want_alpha) {
-            uint8_t dr_ = dp[0], dg_ = dp[1], db_ = dp[2], da_ = dp[3];
-            /* src-over */
-            uint32_t inv = 255 - sa_;
-            dp[0] = (uint8_t)((sr_ * sa_ + dr_ * inv) / 255);
-            dp[1] = (uint8_t)((sg_ * sa_ + dg_ * inv) / 255);
-            dp[2] = (uint8_t)((sb_ * sa_ + db_ * inv) / 255);
-            dp[3] = (uint8_t)(sa_ + (da_ * inv) / 255);
-          } else {
-            dp[0] = sr_;
-            dp[1] = sg_;
-            dp[2] = sb_;
-            dp[3] = sa_;
-          }
-        } else if (dst->format == PIX_FMT_RGB24) {
-          uint8_t *dp = drow + dc * 3;
-          if (want_alpha) {
-            uint8_t dr_ = dp[0], dg_ = dp[1], db_ = dp[2];
-            uint32_t inv = 255 - sa_;
-            dp[0] = (uint8_t)((sr_ * sa_ + dr_ * inv) / 255);
-            dp[1] = (uint8_t)((sg_ * sa_ + dg_ * inv) / 255);
-            dp[2] = (uint8_t)((sb_ * sa_ + db_ * inv) / 255);
-          } else {
-            dp[0] = sr_;
-            dp[1] = sg_;
-            dp[2] = sb_;
-          }
-        } else if (dst->format == PIX_FMT_GRAY8) {
-          uint8_t *dp = drow + dc;
-          if (want_alpha) {
-            uint8_t dg_ = *dp;
-            uint8_t lum = _luma(sr_, sg_, sb_);
-            *dp = (uint8_t)((lum * sa_ + dg_ * (255 - sa_)) / 255);
-          } else {
-            *dp = _luma(sr_, sg_, sb_);
-          }
-        } else if (dst->format == PIX_FMT_RGB565) {
-          uint16_t *dp = (uint16_t *)(drow + dc * 2);
-          if (want_alpha) {
-            /* Read existing */
-            uint16_t dv = *dp;
-            uint8_t dr_ = (uint8_t)(((dv >> 11) & 0x1F) << 3);
-            uint8_t dg_ = (uint8_t)(((dv >> 5) & 0x3F) << 2);
-            uint8_t db_ = (uint8_t)((dv & 0x1F) << 3);
-            uint32_t inv = 255 - sa_;
-            uint8_t rr = (uint8_t)((sr_ * sa_ + dr_ * inv) / 255);
-            uint8_t rg = (uint8_t)((sg_ * sa_ + dg_ * inv) / 255);
-            uint8_t rb = (uint8_t)((sb_ * sa_ + db_ * inv) / 255);
-            *dp =
-                (uint16_t)(((rr & 0xF8) << 8) | ((rg & 0xFC) << 3) | (rb >> 3));
-          } else {
-            *dp = (uint16_t)(((sr_ & 0xF8) << 8) | ((sg_ & 0xFC) << 3) |
-                             (sb_ >> 3));
-          }
-        }
-        break;
-      }
-      case PIX_FMT_RGB24: {
-        const uint8_t *sp = srow + sc * 3;
-        uint8_t sr_ = sp[0], sg_ = sp[1], sb_ = sp[2];
-        if (dst->format == PIX_FMT_RGB24) {
-          uint8_t *dp = drow + dc * 3;
-          dp[0] = sr_;
-          dp[1] = sg_;
-          dp[2] = sb_;
-        } else if (dst->format == PIX_FMT_RGBA32) {
-          uint8_t *dp = drow + dc * 4;
-          dp[0] = sr_;
-          dp[1] = sg_;
-          dp[2] = sb_;
-          dp[3] = 255;
-        } else if (dst->format == PIX_FMT_GRAY8) {
-          drow[dc] = _luma(sr_, sg_, sb_);
-        } else if (dst->format == PIX_FMT_RGB565) {
-          uint16_t *dp = (uint16_t *)(drow + dc * 2);
-          *dp = (uint16_t)(((sr_ & 0xF8) << 8) | ((sg_ & 0xFC) << 3) |
-                           (sb_ >> 3));
-        }
-        break;
-      }
-      case PIX_FMT_GRAY8: {
-        uint8_t g = srow[sc];
-        if (dst->format == PIX_FMT_GRAY8) {
-          drow[dc] = g;
-        } else if (dst->format == PIX_FMT_RGB24) {
-          uint8_t *dp = drow + dc * 3;
-          dp[0] = dp[1] = dp[2] = g;
-        } else if (dst->format == PIX_FMT_RGBA32) {
-          uint8_t *dp = drow + dc * 4;
-          dp[0] = dp[1] = dp[2] = g;
-          dp[3] = 255;
-        } else if (dst->format == PIX_FMT_RGB565) {
-          uint16_t *dp = (uint16_t *)(drow + dc * 2);
-          *dp = (uint16_t)(((g & 0xF8) << 8) | ((g & 0xFC) << 3) | (g >> 3));
-        }
-        break;
-      }
-      case PIX_FMT_RGB565: {
-        const uint16_t *sp = (const uint16_t *)(srow + sc * 2);
-        uint16_t v = *sp;
-        uint8_t sr_ = (uint8_t)(((v >> 11) & 0x1F) << 3);
-        uint8_t sg_ = (uint8_t)(((v >> 5) & 0x3F) << 2);
-        uint8_t sb_ = (uint8_t)((v & 0x1F) << 3);
-        if (dst->format == PIX_FMT_RGB565) {
-          uint16_t *dp = (uint16_t *)(drow + dc * 2);
-          *dp = v;
-        } else if (dst->format == PIX_FMT_RGB24) {
-          uint8_t *dp = drow + dc * 3;
-          dp[0] = sr_;
-          dp[1] = sg_;
-          dp[2] = sb_;
-        } else if (dst->format == PIX_FMT_RGBA32) {
-          uint8_t *dp = drow + dc * 4;
-          dp[0] = sr_;
-          dp[1] = sg_;
-          dp[2] = sb_;
-          dp[3] = 255;
-        } else if (dst->format == PIX_FMT_GRAY8) {
-          drow[dc] = _luma(sr_, sg_, sb_);
-        }
-        break;
-      }
-      default:
-        break;
-      }
-    }
+  /* Dispatch to source-format specific helper */
+  pix_point_t clipped_src = {(int16_t)sx, (int16_t)sy};
+  pix_point_t clipped_dst = {(int16_t)dx, (int16_t)dy};
+  pix_size_t clipped_size = {(uint16_t)w, (uint16_t)h};
+  switch (src->format) {
+  case PIX_FMT_RGB24:
+    return pix_frame_copy_from_rgb24(dst, clipped_dst, src, clipped_src,
+                                     clipped_size, flags);
+  case PIX_FMT_RGBA32:
+    return pix_frame_copy_from_rgba32(dst, clipped_dst, src, clipped_src,
+                                      clipped_size, flags);
+  case PIX_FMT_GRAY8:
+    return pix_frame_copy_from_gray8(dst, clipped_dst, src, clipped_src,
+                                     clipped_size, flags);
+  case PIX_FMT_RGB565:
+    return pix_frame_copy_from_rgb565(dst, clipped_dst, src, clipped_src,
+                                      clipped_size, flags);
+  default:
+    return false;
   }
-  return true;
 }

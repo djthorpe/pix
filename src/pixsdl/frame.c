@@ -1,6 +1,8 @@
+#include "../pix/frame_internal.h"
 #include <pix/pix.h>
 #include <pixsdl/pixsdl.h>
 #include <stdlib.h>
+#include <vg/vg.h>
 
 typedef struct sdl_line_cmd_t {
   int x0, y0, x1, y1;
@@ -13,7 +15,8 @@ static void sdl_queue_line(pix_frame_sdl_ctx_t *ctx, pix_point_t a,
     return;
   if (ctx->line_count == ctx->line_capacity) {
     size_t new_cap = ctx->line_capacity ? ctx->line_capacity * 2 : 64;
-    void *new_buf = realloc(ctx->line_cmds, new_cap * sizeof(sdl_line_cmd_t));
+    void *new_buf =
+        VG_REALLOC(ctx->line_cmds, new_cap * sizeof(sdl_line_cmd_t));
     if (!new_buf)
       return; // drop if OOM
     ctx->line_cmds = new_buf;
@@ -82,7 +85,7 @@ bool pix_frame_init_sdl(pix_frame_t *frame, SDL_Renderer *ren, SDL_Texture *tex,
                         int w, int h, pix_format_t fmt) {
   if (!frame || !ren || !tex)
     return false;
-  pix_frame_sdl_ctx_t *ctx = (pix_frame_sdl_ctx_t *)malloc(sizeof(*ctx));
+  pix_frame_sdl_ctx_t *ctx = (pix_frame_sdl_ctx_t *)VG_MALLOC(sizeof(*ctx));
   if (!ctx)
     return false;
   ctx->renderer = ren;
@@ -102,6 +105,8 @@ bool pix_frame_init_sdl(pix_frame_t *frame, SDL_Renderer *ren, SDL_Texture *tex,
   frame->lock = pix_frame_sdl_lock;
   frame->unlock = pix_frame_sdl_unlock;
   frame->set_pixel = pix_frame_set_pixel;
+  frame->get_pixel = pix_frame_get_pixel;
+  frame->copy = pix_frame_copy;
   // Override draw_line to use hardware if available
   frame->draw_line = pix_frame_sdl_draw_line;
   frame->pixels = NULL;
@@ -188,9 +193,9 @@ void pix_frame_destroy_sdl(pix_frame_t *frame) {
     SDL_DestroyTexture(ctx->texture);
   }
   if (ctx->line_cmds) {
-    free(ctx->line_cmds);
+    VG_FREE(ctx->line_cmds);
   }
-  free(ctx);
+  VG_FREE(ctx);
   frame->user = NULL;
   frame->pixels = NULL;
   frame->stride = 0;

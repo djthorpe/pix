@@ -1,10 +1,22 @@
+#include "../../src/pix/frame_internal.h"
 #include <SDL2/SDL.h>
+#include <math.h>
 #include <pix/image.h>
 #include <pix/pix.h>
 #include <pixsdl/pixsdl.h>
 #include <stdio.h>
 #include <string.h>
 #include <vg/vg.h>
+
+/* Forward declarations for interactive transform helpers (file scope C). */
+static void img_rebuild_initial(pix_frame_t *frame, const pix_frame_t *img,
+                                float *base_scale, float *user_scale,
+                                float *pan_x, float *pan_y, float *angle,
+                                int *xf_dirty);
+static void img_rebuild_transform(pix_frame_t *frame, const pix_frame_t *img,
+                                  float base_scale, float user_scale,
+                                  float pan_x, float pan_y, float angle,
+                                  vg_transform_t *xf, int *xf_dirty);
 
 static const char *kFallbackImages[] = {
     "etc/car-1300x730.jpg",
@@ -69,12 +81,14 @@ int main(int argc, char **argv) {
 
   int win_w = img->size.w;
   int win_h = img->size.h;
+  float img_aspect =
+      (img->size.h != 0) ? (float)img->size.w / (float)img->size.h : 1.0f;
   sdl_app_t *app = sdl_app_create(win_w, win_h, PIX_FMT_RGB24, "sdlimage");
   if (!app) {
     fprintf(stderr, "SDL app create failed\n");
     if (img->finalize)
       img->finalize(img);
-    free(img);
+    VG_FREE(img);
     return 1;
   }
   pix_frame_t *frame = sdl_app_get_frame(app);
@@ -86,7 +100,7 @@ int main(int argc, char **argv) {
     fprintf(stderr, "Canvas allocation failed\n");
     vg_canvas_destroy(&canvas);
     if (img && img->finalize)
-      img->finalize(img), free(img);
+      img->finalize(img), VG_FREE(img);
     sdl_app_destroy(app);
     return 1;
   }
@@ -98,6 +112,18 @@ int main(int argc, char **argv) {
   pix_frame_t *img_flipped = NULL;
 
   bool hflip = false;
+  /* Interactive transform state */
+  float pan_x = 0.0f, pan_y = 0.0f; /* in screen pixels */
+  float base_scale = 1.0f;          /* fit-to-window scale (auto) */
+  float user_scale = 1.0f;          /* user zoom multiplier */
+  float angle = 0.0f;               /* radians */
+  bool dragging = false;            /* left mouse dragging */
+  int last_mx = 0, last_my = 0;
+  vg_transform_t xf; /* composed transform */
+  int xf_dirty = 1;  /* rebuild flag (int to pass by ptr) */
+
+  img_rebuild_initial(frame, img, &base_scale, &user_scale, &pan_x, &pan_y,
+                      &angle, &xf_dirty);
   bool running = true;
   while (running) {
     SDL_Event e;
@@ -112,6 +138,15 @@ int main(int argc, char **argv) {
           running = false;
         } else if (k == SDLK_f) {
           hflip = !hflip; /* toggle horizontal mirror */
+        } else if (k == SDLK_LEFT) {
+          angle -= (float)M_PI / 180.0f * 5.0f; /* 5 deg step */
+          xf_dirty = true;
+        } else if (k == SDLK_RIGHT) {
+          angle += (float)M_PI / 180.0f * 5.0f;
+          xf_dirty = true;
+        } else if (k == SDLK_r) { /* reset */
+          img_rebuild_initial(frame, img, &base_scale, &user_scale, &pan_x,
+                              &pan_y, &angle, &xf_dirty);
         } else if (k == SDLK_SPACE) {
           /* cycle to next image */
           if (image_count > 0) {
@@ -119,19 +154,22 @@ int main(int argc, char **argv) {
             if (img) {
               if (img->finalize)
                 img->finalize(img);
-              free(img);
+              VG_FREE(img);
               img = NULL;
             }
             /* Free flipped cache (will be regenerated lazily) */
             if (img_flipped) {
-              free(img_flipped->pixels);
-              free(img_flipped);
+              VG_FREE(img_flipped->pixels);
+              VG_FREE(img_flipped);
               img_flipped = NULL;
             }
             index = (index + 1) % image_count;
             if (load_image_index(images, image_count, index, &img)) {
               win_w = img->size.w;
               win_h = img->size.h;
+              img_aspect = (img->size.h != 0)
+                               ? (float)img->size.w / (float)img->size.h
+                               : 1.0f;
               pix_frame_resize_sdl(frame, win_w, win_h);
               /* Rebind image shapes to new frame */
               vg_shape_set_image(shape_normal, img, (pix_point_t){0, 0},
@@ -141,8 +179,51 @@ int main(int argc, char **argv) {
               vg_shape_set_image(shape_flipped, NULL, (pix_point_t){0, 0},
                                  (pix_size_t){0, 0}, (pix_point_t){0, 0},
                                  PIX_BLIT_NONE);
+              img_rebuild_initial(frame, img, &base_scale, &user_scale, &pan_x,
+                                  &pan_y, &angle, &xf_dirty);
             }
           }
+        }
+        break;
+      }
+      case SDL_MOUSEBUTTONDOWN:
+        if (e.button.button == SDL_BUTTON_LEFT) {
+          dragging = true;
+          last_mx = e.button.x;
+          last_my = e.button.y;
+        }
+        break;
+      case SDL_MOUSEBUTTONUP:
+        if (e.button.button == SDL_BUTTON_LEFT) {
+          dragging = false;
+        }
+        break;
+      case SDL_MOUSEMOTION:
+        if (dragging) {
+          int mx = e.motion.x, my = e.motion.y;
+          pan_x += (float)(mx - last_mx);
+          pan_y += (float)(my - last_my);
+          last_mx = mx;
+          last_my = my;
+          xf_dirty = true;
+        }
+        break;
+      case SDL_MOUSEWHEEL: {
+        /* Scroll up positive y => zoom in */
+        if (e.wheel.y != 0) {
+          float factor = (e.wheel.y > 0) ? 1.1f : 1.0f / 1.1f;
+          /* Zoom about window center: adjust pan so visual center stays */
+          float old_user = user_scale;
+          user_scale *= factor;
+          if (user_scale < 0.01f)
+            user_scale = 0.01f;
+          if (user_scale > 100.0f)
+            user_scale = 100.0f;
+          float sx = user_scale / old_user;
+          /* Keep pan relative to center (simple: scale pan as well) */
+          pan_x *= sx;
+          pan_y *= sx;
+          xf_dirty = true;
         }
         break;
       }
@@ -153,6 +234,16 @@ int main(int argc, char **argv) {
           int new_h = e.window.data2;
           if (new_w > 0 && new_h > 0) {
             pix_frame_resize_sdl(frame, new_w, new_h);
+            /* Recompute only base_scale (retain user_scale, pan, angle). */
+            if (img && img->size.w > 0 && img->size.h > 0) {
+              float sx = (float)frame->size.w / (float)img->size.w;
+              float sy = (float)frame->size.h / (float)img->size.h;
+              float s = (sx < sy ? sx : sy);
+              if (s <= 0.f)
+                s = 1.f;
+              base_scale = s;
+              xf_dirty = 1;
+            }
           }
         }
         break;
@@ -165,6 +256,12 @@ int main(int argc, char **argv) {
     /* Clear */
     pix_frame_clear(frame, 0xFF000000);
     if (img) {
+      if (xf_dirty)
+        img_rebuild_transform(frame, img, base_scale, user_scale, pan_x, pan_y,
+                              angle, &xf, &xf_dirty);
+      /* Attach transform to whichever shape is active */
+      vg_shape_set_transform(shape_normal, &xf);
+      vg_shape_set_transform(shape_flipped, &xf);
       if (hflip) {
         if (!img_flipped) {
           /* Allocate flipped frame same format/size. */
@@ -215,13 +312,57 @@ int main(int argc, char **argv) {
   if (img) {
     if (img->finalize)
       img->finalize(img);
-    free(img);
+    VG_FREE(img);
   }
   if (img_flipped) {
-    free(img_flipped->pixels);
-    free(img_flipped);
+    VG_FREE(img_flipped->pixels);
+    VG_FREE(img_flipped);
   }
   vg_canvas_destroy(&canvas);
   sdl_app_destroy(app);
   return 0;
+}
+
+/* Helper implementations */
+static void img_rebuild_initial(pix_frame_t *frame, const pix_frame_t *img,
+                                float *base_scale, float *user_scale,
+                                float *pan_x, float *pan_y, float *angle,
+                                int *xf_dirty) {
+  if (!img || !frame)
+    return;
+  float sx = (float)frame->size.w / (float)img->size.w;
+  float sy = (float)frame->size.h / (float)img->size.h;
+  float s = (sx < sy ? sx : sy);
+  if (s <= 0.f)
+    s = 1.f;
+  *base_scale = s;
+  if (user_scale)
+    *user_scale = 1.0f; /* reset user zoom on rebuild */
+  *pan_x = 0.f;
+  *pan_y = 0.f;
+  *angle = 0.f;
+  if (xf_dirty)
+    *xf_dirty = 1;
+}
+
+static void img_rebuild_transform(pix_frame_t *frame, const pix_frame_t *img,
+                                  float base_scale, float user_scale,
+                                  float pan_x, float pan_y, float angle,
+                                  vg_transform_t *xf, int *xf_dirty) {
+  if (!img || !frame || !xf)
+    return;
+  float wcx = frame->size.w * 0.5f;
+  float wcy = frame->size.h * 0.5f;
+  vg_transform_t t_center_neg, t_scale, t_rot, t_final, tmp1, tmp2;
+  vg_transform_translate(&t_center_neg, -(float)img->size.w * 0.5f,
+                         -(float)img->size.h * 0.5f);
+  float s = base_scale * user_scale;
+  vg_transform_scale(&t_scale, s, s);
+  vg_transform_rotate(&t_rot, angle);
+  vg_transform_translate(&t_final, wcx + pan_x, wcy + pan_y);
+  vg_transform_multiply(&tmp1, &t_scale, &t_center_neg);
+  vg_transform_multiply(&tmp2, &t_rot, &tmp1);
+  vg_transform_multiply(xf, &t_final, &tmp2);
+  if (xf_dirty)
+    *xf_dirty = 0;
 }

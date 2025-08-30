@@ -2,6 +2,7 @@
 #include <pix/pix.h>
 #include <pixsdl/pixsdl.h>
 #include <stdlib.h>
+#include <vg/vg.h>
 
 struct sdl_app_t {
   SDL_Window *window;
@@ -38,18 +39,18 @@ static bool sdl_app_resize_texture(sdl_app_t *app, int new_w, int new_h) {
 
 sdl_app_t *sdl_app_create(int width, int height, pix_format_t fmt,
                           const char *title) {
-  sdl_app_t *app = (sdl_app_t *)malloc(sizeof(*app));
+  sdl_app_t *app = (sdl_app_t *)VG_MALLOC(sizeof(*app));
   if (!app)
     return NULL;
   if (SDL_Init(SDL_INIT_VIDEO) != 0) {
-    free(app);
+    VG_FREE(app);
     return NULL;
   }
   if (SDL_CreateWindowAndRenderer(width, height,
                                   SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE,
                                   &app->window, &app->renderer) != 0) {
     SDL_Quit();
-    free(app);
+    VG_FREE(app);
     return NULL;
   }
   if (title)
@@ -63,7 +64,7 @@ sdl_app_t *sdl_app_create(int width, int height, pix_format_t fmt,
     SDL_DestroyRenderer(app->renderer);
     SDL_DestroyWindow(app->window);
     SDL_Quit();
-    free(app);
+    VG_FREE(app);
     return NULL;
   }
 
@@ -75,7 +76,7 @@ sdl_app_t *sdl_app_create(int width, int height, pix_format_t fmt,
     SDL_DestroyRenderer(app->renderer);
     SDL_DestroyWindow(app->window);
     SDL_Quit();
-    free(app);
+    VG_FREE(app);
     return NULL;
   }
   // We do our own blending when RGBA; keep SDL blending off when we present
@@ -98,7 +99,7 @@ void sdl_app_destroy(sdl_app_t *app) {
   if (app->window)
     SDL_DestroyWindow(app->window);
   SDL_Quit();
-  free(app);
+  VG_FREE(app);
 }
 
 pix_frame_t *sdl_app_get_frame(sdl_app_t *app) {

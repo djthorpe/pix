@@ -1,26 +1,42 @@
-# VG demo (software vector graphics + SDL2)
+# pix / vg (software pixels + vector graphics + SDL2)
 
-A tiny software vector-graphics renderer in C with an SDL2 demo. It renders filled and stroked polylines with transparency and anti‑aliasing into a pixel buffer, then presents via an SDL streaming texture.
+Small C library providing:
+
+* Pixel frame abstraction with pluggable per‑format ops (RGB24, RGBA32, GRAY8, RGB565)
+* Software vector graphics: filled & stroked polylines with AA
+* Optional SDL2 integration examples (window + texture blit)
 
 ## Features
 
-- Paths and shapes (rect, circle, ellipse, rounded‑rect, triangle)
-- Transforms (2D affine: translate, scale, rotate, multiply)
-- Fill rule: even‑odd (non‑zero implementation path present, enum pending)
-- Scanline fill with X‑axis anti‑aliasing (coverage)
-- Strokes with width, caps (butt/square/round), joins (bevel/round)
-- Hairline stroke AA (Xiaolin Wu)
-- RGBA src‑over blending (straight alpha) in software
-- Embedded‑friendly: minimal heap churn; stack-first buffers with malloc fallback
+* Paths & shapes (rect, circle, ellipse, rounded‑rect, triangle primitives)
+* Variadic path append API: `vg_path_append(path, &p0, &p1, &p2, NULL);`
+* 2D affine transforms (translate / scale / rotate / multiply)
+* Fill rules: even‑odd (bridged) + even‑odd raw (no gap bridging)
+* Scanline fill with horizontal coverage AA
+* Strokes: variable width, caps (butt / square / round), joins (bevel / round / miter + miter limit)
+* Hairline (<=1px) stroke AA (Xiaolin Wu)
+* RGBA src‑over blending (straight alpha) in software
+* Image shapes: blit regions from one `pix_frame_t` into another (alpha optional)
+* Basic image scaling (contain) and affine‑transformed image blits
+* Bounding box helpers: `vg_shape_bbox`, `vg_canvas_bbox`
+* Minimal heap churn (segmented paths; canvas grows in pointer chunks)
 
 ## Layout
 
-- `include/`
-  - Public headers: `vg/`, `pix/`, `sdl/`
-- `src/`
-  - Implementations: `vg/`, `pix/`, `sdl/`
-- `demo.c`
-  - Small program that animates a square, circle, and triangle
+```text
+include/
+  pix/    public pixel frame API
+  vg/     vector graphics headers
+  pixsdl/ SDL convenience layer (optional)
+src/
+  pix/    per‑format frame ops + helpers
+  vg/     path / fill / primitives / canvas / transform / shape
+  pixsdl/ SDL bridge (creates a `pix_frame_t` backed by streaming texture)
+examples/
+  sdldemo   simple animated primitives
+  sdltiger  SVG tiger subset (polylines) demo
+  sdlimage  image blit + transform showcase
+```
 
 ## Build
 
@@ -35,7 +51,7 @@ cmake ..
 make -j
 ```
 
-This produces a `demo` executable in `build/`.
+This produces example executables in `build/examples/*` (`sdldemo`, `sdltiger`, `sdlimage`).
 
 If you already have a generated Makefile at the repository root, you can also run:
 
@@ -45,13 +61,13 @@ make
 
 ## Run
 
-From the build directory:
+From the build directory run any example, e.g.:
 
 ```bash
-./demo
+examples/sdldemo/sdldemo
 ```
 
-A resizable window opens; the scene animates with AA, fills, and strokes.
+Resizable window shows animated AA fills + strokes.
 
 ## Docs (Doxygen)
 
@@ -66,37 +82,71 @@ HTML will be emitted under `./docs/html/` in the build directory. If CMake repor
 
 ## Using the APIs
 
-- Pixels: `pix/frame.h` defines `pix_frame_t` with lock/unlock, set_pixel, draw_line, and clear. Formats supported: `RGB24`, `RGBA32`, and `GRAY8`.
-- SDL glue: `sdl/sdl_app.h` and `sdl/frame_sdl.h` wrap an SDL window/renderer/streaming texture and expose a `pix_frame_t` you can render into.
-- Vector graphics:
-  - Paths: `vg/path.h` (packed i16 points, chainable segments)
-  - Shapes: `vg/shape.h` (style, transform pointer)
-  - Primitives: `vg/primitives.h` (rect/circle/ellipse/rounded‑rect/triangle)
-  - Fill: `vg/fill.h` (`vg_fill_path/shape`, rule selection)
-  - Canvas: `vg/canvas.h` (append shapes & render; pooled shape storage to reduce mallocs)
-  - Transforms: `vg/transform.h` (build and combine 3×3 affine matrices)
+### Pixels (`pix/frame.h`)
 
-Color is `0xAARRGGBB` (straight alpha). Use `VG_COLOR_NONE` to disable fill or stroke.
+`pix_frame_t` is a generic pixel buffer descriptor with function pointers set per format at creation:
 
-### Shape Pooling
+```c
+typedef struct pix_frame_t {
+  pix_size_t size;
+  pix_format_t format;       // RGB24 / RGBA32 / GRAY8 / RGB565
+  void *pixels;               // backing store
+  size_t pitch;               // bytes per row
+  // function pointers (may be NULL if unsupported by backend):
+  void (*finalize)(struct pix_frame_t*);      // optional cleanup
+  bool (*lock)(struct pix_frame_t*);          // optional (e.g. SDL texture)
+  void (*unlock)(struct pix_frame_t*);
+  void (*set_pixel)(struct pix_frame_t*, pix_point_t pt, pix_color_t c);
+  pix_color_t (*get_pixel)(struct pix_frame_t*, pix_point_t pt);
+  void (*draw_line)(struct pix_frame_t*, pix_point_t a, pix_point_t b, pix_color_t c);
+  void (*copy)(struct pix_frame_t *dst, pix_point_t dst_origin,
+               struct pix_frame_t *src, pix_point_t src_origin,
+               pix_size_t size, pix_blit_flags_t flags);
+} pix_frame_t;
+```
 
-`vg_canvas_t` attempts to allocate a contiguous block of `vg_shape_t` structs.
-`vg_canvas_append` returns pointers into that pool so repeated appends do not
-incur per‑shape heap allocations. Clearing the canvas releases each pooled
-shape's path and resets the pool usage counter; the raw structs are recycled.
-If the pool allocation fails at init the code falls back to per‑shape heap
-allocation transparently.
+Blit flags (`pix_blit_flags_t`) currently: `PIX_BLIT_NONE`, `PIX_BLIT_ALPHA`.
+
+Per‑format optimized implementations are internal; you manipulate frames only via these pointers. `PIX_COLOR_NONE` (0) denotes “no paint”.
+
+### Vector Graphics
+
+* Paths (`vg/path.h`): segmented list of packed `int16_t` points. Append points variadically: `vg_path_append(path, &p0, &p1, &p2, NULL);`
+* Shapes (`vg/shape.h`): style (fill/stroke colors, widths, caps, joins, miter limit, fill rule) + optional transform pointer or image descriptor (`vg_shape_set_image`).
+* Primitives (`vg/primitives.h`): helpers to append rectangles, circles, ellipses, rounded rects, triangles to a path.
+* Canvas (`vg/canvas.h`): growable list (chunked pointer arrays) owning appended shapes; `vg_canvas_render` draws fill then stroke.
+* Fill (`vg/fill.h`): internal scan conversion used by render; you normally rely on canvas.
+* Transforms (`vg/transform.h`): 3×3 affine matrix helpers; apply at render time.
+* Bounding boxes: `vg_shape_bbox` for a single shape, `vg_canvas_bbox` for all shapes (ignores transforms & stroke expansion currently).
+
+### Image Shapes
+
+Turn a shape into an image blit: `vg_shape_set_image(shape, frame, src_origin, src_size, dst_origin, flags)`. Size `{0,0}` means full frame. Affine transform (if set) may scale / rotate the blit (axis‑aligned fast path + general affine fallback).
+
+### SDL glue
+
+`pixsdl/` provides helpers to wrap an SDL2 streaming texture as a `pix_frame_t` so the same software rendering can target a window.
+
+Color encoding is `0xAARRGGBB` (straight alpha). Use `PIX_COLOR_NONE` to disable fill or stroke.
+
+### Canvas Growth Strategy
+
+The canvas stores an array of shape pointers per chunk. When a chunk fills, a new chunk (same capacity as head) is linked. Each shape is currently heap‑allocated; future pooling optimizations may inline shapes per chunk. Ownership: shapes appended to a canvas are freed by `vg_canvas_destroy`.
 
 Guidelines:
 
-- Never call `vg_shape_destroy` on a shape returned by `vg_canvas_append`.
-- After `vg_canvas_clear`, rebuild geometry before reusing previous shape
-  pointers (their path storage was freed).
-- Use `vg_shape_create` only when you need a shape with lifetime independent
-  of a particular canvas.
+* Do not manually destroy shapes returned by `vg_canvas_append`.
+* Use `vg_shape_create` only for shapes you manage outside a canvas.
+* Mutate geometry directly via `vg_shape_path(shape)` + `vg_path_append`.
 
 ## Notes & Tips
 
-- SDL texture format is set to `ABGR8888` for RGBA to match the CPU memory byte order on little‑endian systems; this prevents color channel swaps.
-- Fill sampling uses half‑open pixel coverage (y+0.5) to avoid seam artifacts; intersections are recomputed per scanline.
-- For embedded targets, the renderer prefers stack buffers and only allocates on the heap for large paths.
+* `vg_path_append` is variadic: always end the list with `NULL`.
+* For large paths, the library allocates additional segments instead of reallocating the whole point array.
+* Fill sampling uses half‑open pixel centers (y+0.5) to reduce seam artifacts.
+* SDL texture format (when using pixsdl) matches the in‑memory pixel layout to avoid channel swizzle.
+* Bounding boxes ignore transforms & stroke expansion (future enhancement).
+
+---
+
+Early‑stage project; API surface intentionally small and may evolve.

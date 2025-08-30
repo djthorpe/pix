@@ -3,12 +3,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../../src/pix/frame_internal.h"
 #include "canvas.h"
 #include "tiger.h"
 #include <SDL2/SDL.h>
 #include <pix/pix.h>
 #include <pixsdl/pixsdl.h>
 #include <vg/vg.h>
+
 
 int main(void) {
   int win_w = 640, win_h = (int)(640.0f * (tigerMaxY / tigerMaxX));

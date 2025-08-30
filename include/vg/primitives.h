@@ -2,56 +2,61 @@
 #include "path.h"
 #include "shape.h"
 
-/* Primitive shape initializers.
+/**
+ * @file vg/primitives.h
+ * @brief Convenience geometry builders for common path outlines.
  *
- * These helpers build common geometric paths directly into an existing
- * vg_shape_t. They REPLACE the shape's current path (freeing its previous
- * storage) but DO NOT modify any other shape properties (fill/stroke colors,
- * stroke params, transform, fill rule). This keeps responsibilities separated:
- *  - vg_canvas_append / vg_shape_create : allocate + apply defaults
- *  - vg_shape_init_*                    : set geometry only
+ * These helpers construct or replace only the path geometry of an existing
+ * shape; styling (fill / stroke / transform / fill rule) is left untouched.
+ * This separation keeps creation predictable and avoids implicit side effects.
  *
- * Typical usage:
- *   vg_shape_t *s = vg_canvas_append(&canvas); // has default colors/etc
- *   vg_shape_init_rect(s, origin, size);       // geometry only
- *   vg_shape_set_fill_color(s, 0xFF....);      // customize style
+ * Usage pattern:
+ * @code
+ *   vg_shape_t *s = vg_canvas_append(&canvas); // default style applied
+ *   vg_shape_init_rect(s, origin, size);       // define geometry
+ *   vg_shape_set_fill_color(s, 0xFF3366FF);    // customize styling
+ * @endcode
  *
- * Reusing a shape: calling another vg_shape_init_* will discard the old path
- * (cleanly) and build the new one while preserving styling state.
+ * Re-invoking a vg_shape_init_* on the same shape discards its previous path
+ * (memory is freed) and installs the new one, preserving style fields.
  *
- * All coordinates use 16‑bit signed (pix_point_t) and sizes / radii use
- * 16‑bit unsigned (pix_size_t / pix_scalar_t). Supplying larger values will
- * truncate. Passing NULL shape returns false and leaves state unchanged.
+ * Coordinate constraints: positions use 16-bit signed; sizes and radii use
+ * 16-bit unsigned storage. Larger inputs are truncated. Passing a NULL shape
+ * returns false without side effects.
  */
 
-/** Initialize an axis-aligned rectangle at origin with extent size. */
+/** @ingroup vg
+ * Initialize an axis-aligned rectangle at origin with extent size. */
 bool vg_shape_init_rect(vg_shape_t *s, pix_point_t origin, pix_size_t size);
 
-/** Initialize a regular polygonal approximation of a circle.
+/** @ingroup vg
+ * Initialize a regular polygonal approximation of a circle.
  * @param center Center point.
  * @param radius Circle radius (pixels).
- * @param segments Number of line segments (minimum enforced internally: 8).
+ * @param segments Requested segment count (clamped to minimum 8).
  */
 bool vg_shape_init_circle(vg_shape_t *s, pix_point_t center,
                           pix_scalar_t radius, int segments);
 
-/** Initialize a polygonal approximation of an ellipse.
+/** @ingroup vg
+ * Initialize a polygonal approximation of an ellipse.
  * @param center Center point.
  * @param rx Horizontal radius.
  * @param ry Vertical radius.
- * @param segments Number of line segments (minimum enforced internally: 8).
+ * @param segments Requested segment count (clamped to minimum 8).
  */
 bool vg_shape_init_ellipse(vg_shape_t *s, pix_point_t center, pix_scalar_t rx,
                            pix_scalar_t ry, int segments);
 
-/** Initialize a rounded rectangle.
- * Radius is clamped so it never exceeds half the width/height. If
- * seg_per_corner < 2 it is promoted to 8 for smoother corners.
+/** @ingroup vg
+ * Initialize a rounded rectangle.
+ * Radius is clamped to at most half width/height. seg_per_corner < 2 => 8.
  */
 bool vg_shape_init_round_rect(vg_shape_t *s, pix_point_t origin,
                               pix_size_t size, pix_scalar_t radius,
                               int seg_per_corner);
 
-/** Initialize a triangle with vertices a,b,c (automatically closed). */
+/** @ingroup vg
+ * Initialize a triangle with vertices a,b,c (automatically closed). */
 bool vg_shape_init_triangle(vg_shape_t *s, pix_point_t a, pix_point_t b,
                             pix_point_t c);
