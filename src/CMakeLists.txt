@@ -28,5 +28,11 @@ if (SDL2_FOUND)
     target_compile_definitions(pix PUBLIC PIX_ENABLE_SDL)
 endif()
 
+# Linux framebuffer backend
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_compile_definitions(pix PUBLIC PIX_ENABLE_FB)
+    target_sources(pix PRIVATE pix/fb.c)
+endif()
+
 # Add icons
 add_subdirectory(icons)

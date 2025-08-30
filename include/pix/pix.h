@@ -60,3 +60,6 @@ typedef uint32_t pix_color_t;
 #ifdef PIX_ENABLE_SDL
 #include "sdl.h"
 #endif
+#ifdef PIX_ENABLE_FB
+#include "fb.h"
+#endif

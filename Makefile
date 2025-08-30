@@ -25,6 +25,13 @@ docs: dep-docker
 	@echo make docs
 	@${DOCKER} run -v .:/data greenbone/doxygen doxygen /data/doxygen/Doxyfile
 
+# Update submodules
+.PHONY: submodule
+submodule: dep-git
+	@echo
+	@echo "checking out submodules"
+	@${GIT} submodule update --init --recursive
+
 .PHONY: mkdir
 mkdir:
 	@install -d -m 755 $(BUILD_DIR)
@@ -53,7 +60,7 @@ $(SVG2PIX): dep-go cmd/svg2pix/main.go go.mod
 
 # Generate icon C sources from Tabler icons (filled + outline)
 .PHONY: icons
-icons: $(SVG2PIX)
+icons: $(SVG2PIX) submodule
 	@echo Generating icon sources from Tabler \(filled + outline\)
 	@install -d -m 755 $(ICON_OUT_DIR)/filled
 	@install -d -m 755 $(ICON_OUT_DIR)/outline
