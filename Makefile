@@ -28,12 +28,14 @@ docs: dep-docker
 
 # Build svg2pix code generator
 $(SVG2PIX): dep-go cmd/svg2pix/main.go go.mod
+	@echo
 	@echo Building svg2pix tool
-	${GO} build -o $@ ./cmd/svg2pix
+	@${GO} build -o $@ ./cmd/svg2pix
 
 # Generate icon C sources from Tabler icons (filled + outline)
 .PHONY: icons
 icons: $(SVG2PIX) submodule
+	@echo
 	@echo Generating icon sources from Tabler \(filled + outline\)
 	@install -d -m 755 $(ICON_OUT_DIR)/filled
 	@install -d -m 755 $(ICON_OUT_DIR)/outline
