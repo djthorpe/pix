@@ -1,7 +1,8 @@
 CMAKE ?= $(shell which cmake 2>/dev/null)
 DOCKER ?= $(shell which docker 2>/dev/null)
-BUILD_DIR ?= build
 GO ?= $(shell which go 2>/dev/null)
+GIT ?= $(shell which git 2>/dev/null)
+BUILD_DIR ?= build
 JOBS ?= 8
 
 # Icon generation settings
@@ -24,6 +25,21 @@ docs: dep-docker
 	@echo
 	@echo make docs
 	@${DOCKER} run -v .:/data greenbone/doxygen doxygen /data/doxygen/Doxyfile
+
+# Build svg2pix code generator
+$(SVG2PIX): dep-go cmd/svg2pix/main.go go.mod
+	@echo Building svg2pix tool
+	@${GO} build -o ${BUILD_DIR}/$@ ./cmd/svg2pix
+
+# Generate icon C sources from Tabler icons (filled + outline)
+.PHONY: icons
+icons: $(SVG2PIX) submodule
+	@echo Generating icon sources from Tabler \(filled + outline\)
+	@install -d -m 755 $(ICON_OUT_DIR)/filled
+	@install -d -m 755 $(ICON_OUT_DIR)/outline
+	@$(SVG2PIX) -in $(TABLER_FILLED_DIR) -out $(ICON_OUT_DIR)/filled -prefix vg_icon_f_ -upscale $(ICON_UPSCALE)
+	@$(SVG2PIX) -in $(TABLER_OUTLINE_DIR) -out $(ICON_OUT_DIR)/outline -prefix vg_icon_o_ -upscale $(ICON_UPSCALE)
+	@echo Icon generation complete: $(ICON_OUT_DIR)
 
 # Update submodules
 .PHONY: submodule
@@ -53,17 +69,6 @@ dep-docker:
 dep-go:
 	@test -f "${GO}" && test -x "${GO}" || (echo "Missing Go toolchain: ${GO}" && exit 1)
 
-# Build svg2pix code generator
-$(SVG2PIX): dep-go cmd/svg2pix/main.go go.mod
-	@echo Building svg2pix tool
-	@${GO} build -o ${BUILD_DIR}/$@ ./cmd/svg2pix
-
-# Generate icon C sources from Tabler icons (filled + outline)
-.PHONY: icons
-icons: $(SVG2PIX) submodule
-	@echo Generating icon sources from Tabler \(filled + outline\)
-	@install -d -m 755 $(ICON_OUT_DIR)/filled
-	@install -d -m 755 $(ICON_OUT_DIR)/outline
-	@$(SVG2PIX) -in $(TABLER_FILLED_DIR) -out $(ICON_OUT_DIR)/filled -prefix vg_icon_f_ -upscale $(ICON_UPSCALE)
-	@$(SVG2PIX) -in $(TABLER_OUTLINE_DIR) -out $(ICON_OUT_DIR)/outline -prefix vg_icon_o_ -upscale $(ICON_UPSCALE)
-	@echo Icon generation complete: $(ICON_OUT_DIR)
+.PHONY: dep-git
+dep-git:
+	@test -f "${GIT}" && test -x "${GIT}" || (echo "Missing GIT: ${GIT}" && exit 1)
