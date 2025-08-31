@@ -1,4 +1,4 @@
-# pix / vg (software pixels + vector graphics + SDL2)
+# pix
 
 Small C library providing:
 
